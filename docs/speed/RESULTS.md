@@ -1663,3 +1663,10 @@ the same four Sparks:
 
 FP8 decodes ~20% slower than the 4-bit pack (twice the expert bytes a round, bf16 x widened e4m3 on the tensor
 cores) and scores better on the held passages; the pair at TP=2 (38.4 / 56.6) stays below both.
+
+**FP8 prefill and mixed (docs/speed/tp4/fp8-bench2.log; memory sampled every 5 s on all four Sparks, fp8-mem.log):**
+prefill 16K 1,746 tok/s (TTFT 9.1 s), 64K 1,787 (35.7 s) - the same as EXL3's 1,752 / 1,889 at TP=4: prefill is not
+bound by the expert bytes. conc2 64.5 total, conc4 83.5; mixed1 decoder 52.9 before / 17.3 during / 48.6 after a 50K
+prefill (gap p95 72 ms, max 2.8 s); a 30K pair 35.3 s and 22.1 s against 17.5 s alone. Lowest available memory during
+the bench: spark1 12.3 GiB, spark2 14.3, spark3 11.9, spark4 14.3 (the KILL floor was 5): the reserve goes to 9.5 on
+the next restart, as on the pair, for a prompt cache.
