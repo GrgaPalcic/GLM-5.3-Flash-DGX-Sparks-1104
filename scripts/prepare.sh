@@ -80,6 +80,7 @@ validate_config() {
     [[ "$WORKER" != "$WORKER2" && "$WORKER" != "$WORKER3" && "$WORKER2" != "$WORKER3" ]] || fail E_CONFIG 'WORKER, WORKER2 and WORKER3 must name three different Sparks.'
     [[ "$PREFILL_REDUCE" =~ ^(gather|ring)$ ]] || fail E_CONFIG 'PREFILL_REDUCE must be gather or ring (TF_GLM_PREFILL_REDUCE on a ring; split cannot run there).'
     [[ "$RING_NCCL_ALGO" =~ ^[A-Za-z,^]+$ ]] || fail E_CONFIG 'RING_NCCL_ALGO must be an NCCL_ALGO value (Ring).'
+    [[ "$ROCE_RING" =~ ^(on|off)$ ]] || fail E_CONFIG 'ROCE_RING must be on or off (TF_ROCE_RING: the four-rank RoCE ring all-gather).'
     for key in MASTER_ADDR SOCKET_IFNAME NFS_SERVER1 NFS_SERVER2 NFS_SERVER3; do
       [[ -z "${!key}" || "${!key}" =~ ^[A-Za-z0-9.:_-]+$ ]] || fail E_CONFIG "$key must be an address, host name or netdev."
     done

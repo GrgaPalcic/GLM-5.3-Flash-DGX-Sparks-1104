@@ -1,5 +1,13 @@
 # Changelog
 
+- **2026-11-04** -- `0108` (candidate, off by default): the four-rank RoCE ring all-gather. `ROCE_RING=on ./start-tp4.sh`
+  carries the decode and verify all-gathers up to `ROCE_MAX_KB` as one-shot RDMA writes to both neighbours, each
+  relaying half a shard to the rank across (`TF_ROCE_RING=1`, `TF_ROCE_HCA=<toward previous>,<toward next>` per
+  rank); any rank that cannot bring it up puts all four back on NCCL. `tf-cuda-test roce-ring <rank>` checks bytes
+  against NCCL, graph replays and times a call (16 KiB a rank: 20 us against NCCL's 28). On FP8 at TP=4, same image
+  A/B: +1-2% at one stream, +5-7% at four, prefill, hashes and NLL identical. Under the pre-registered 3% one-stream
+  line, so the default stays off; the image (5d37e5287d7b, 108 patches) is on all four Sparks. docs/speed/RESULTS.md
+  "The four-rank RoCE ring all-gather".
 - **2026-11-04** -- `0107`: block FP8 checkpoints (`quant_method: fp8`, e4m3, 128 x 128 scales) load on this engine:
   `FP8=1 ./start-tp4.sh` serves Z.AI's own release `zai-org/GLM-5.3-Flash` @ `46a050be` (the model is published in
   block FP8; `unsloth/GLM-5.3-Flash-FP8` is its byte-identical mirror, the copy this kit measured) at TP=4 on the

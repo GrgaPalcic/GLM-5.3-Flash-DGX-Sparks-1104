@@ -1715,3 +1715,106 @@ for cuda_relay's ring (the lab's design) or own-front / micro-batch style exchan
 **Back on gather (23:05 local): 6,147 pages, 1.3 GiB prompt cache. FP8 at 6 / 8 streams (docs/speed/tp4/fp8-acc8.log):
 98-100 / 112-114 tok/s total (per stream 16-17 / 13-16; ms/round 125 / 145) against EXL3's 139-141 / 163-166.**
 The FP8 serve is the live state; the EXL3 pack returns with `./start-tp4.sh restart` without FP8=1.
+
+## The four-rank RoCE ring all-gather: candidate 0108 pre-registered (2026-11-04, 23:30 local)
+
+**What (engine patch 0108, docs/speed/candidates/0108-*):** Codex's design (1) as a sibling of roce.zig: a new
+`zig/src/cuda/roce_ring.zig` + `roce_ring_gather.cu`, opt-in with `TF_ROCE_RING=1` at world 4 (`TF_ROCE=1` as well;
+`TF_ROCE_HCA` names the device cabled to the previous rank, then the one to the next). Each gather: the kernel
+stages the shard and rings the doorbell; the proxy writes the shard to both neighbours (data, then one flag line a
+logical half); on every loop turn it relays the left neighbour's half 0 on to the right and the right neighbour's
+half 1 on to the left (the original source's slot and flag address kept, so a flag lands after its data on the same
+queue pair); the kernel waits six flags (two halves from each of left, right and across) and copies the four shards
+out in rank order; the last block advances the epoch (graph replays as in roce.zig). Relay lifetime: a rank posts
+its own sequence s only after its relays of s-1 are posted and their completions reaped; a neighbour cannot start
+s+1 without this rank's s, so no slot is overwritten under a relay. The kernel's own dependency (every rank's shard of
+the same sequence) keeps a rank's kernel s finished before any s+2 lands. Flag timeouts poison the counters and the
+host's `check()` after a synchronize raises `ProxyFailed` (tp_watch's abort path, as the two-rank path). The launcher's
+knob `ROCE_RING=on` (default off) sets the three variables per rank from the fabric detection. roce.zig's verbs ABI,
+HCA naming and GID lookup become `pub` for the sibling; nothing else in the two-rank path changes.
+
+**Gates (fixed before the first run):**
+- GO-1 (bytes): `tf-cuda-test roce-ring <rank>` on the four Sparks: shards of 16, 48, 4096, 8192, 16384, 32768,
+  65536, 262144 and 524288 bytes a rank over 3 seeds equal NCCL's all-gather byte for byte (the odd pack counts take
+  the uneven split of halves); a captured graph of 4 gathers replayed 64 times, each replay's rows its own.
+- GO-2 (time): the warmed 16 KiB-a-rank gather under 40 us a call (NCCL's measured ~109 us); 4-64 KiB reported.
+- GO-3 (serve): FP8 at TP=4 with `ROCE_RING=on` boots, the quality tool's NLL and the greedy answers' hashes equal the
+  NCCL path's (b363136de28e / d240a39d8c68, NLL 0.7425); decode at 1 stream above 44.7 / 65.2 tok/s (prose / code)
+  by at least 5%, and 4 streams above 83-87 by at least 5%.
+- KILL: any byte mismatch, a hang or a poisoned gather in the device test, a boot that does not come up on all four
+  ranks, a quality or hash difference, or a decode gain under 3% at 1 stream (then NCCL keeps the gathers and the
+  patch stays a candidate with its numbers recorded).
+- Bounded failures: a rank that cannot bring the path up (no device, a refused queue pair) makes all four fall back to
+  NCCL together (the verdict all-gather), never a mixed world.
+
+**Built and tested (22:20-22:50 local).** Host unit tests on spark5: the cuda module's tests pass with the new module
+(the same three pre-existing failing steps as every run today); `tf-cuda-test` compiles with the ring kernel. Image
+5d37e5287d7b (108 patches) built on spark1 in 360 s of zig and shipped to spark2/3/4 (one image id on all four).
+`tf-cuda-test roce-ring <rank>` on the four Sparks in that image, with the serve's ring NCCL environment and
+`TF_ROCE_HCA` per rank (docs/speed/tp4/ring-devtest-rank{0..3}.log):
+
+| | result |
+|---|---|
+| GO-1 bytes | PASS on all four ranks: 11 sizes x 3 seeds equal NCCL's all-gather (27 of 33 cases by the ring, the rest NCCL by size); a graph of 4 gathers replayed 64 times, each replay's rows its own |
+| GO-2 time (us a call, 2000 back-to-back, warmed) | ring / NCCL: 4 KiB 14.4 / 24.3; 8 KiB 16.0 / 25.3; 16 KiB 20.3 / 28.5; 32 KiB 25.8 / 35.4; 64 KiB 36.4 / 45.7 |
+
+GO-2 met (20.3 us at 16 KiB, under 40). Note the NCCL side: back-to-back on an idle device NCCL takes 28.5 us a call
+here, not the ~109 us Codex took from the decode profile (that figure holds the engine's dependent launches and
+stream waits); the ring saves 8-10 us a call at decode sizes against this measurement, so the serve's gain will be set
+by the engine's gather sections (gather_a + gather_b 4.6 ms a round on FP8) rather than the device-test delta.
+
+**Serve (23:15 local):** `FP8=1 ROCE_RING=on ./start-tp4.sh` on image 5d37e5287d7b: all four ranks report
+"RoCE ring all-gather: rank r writes to ranks L and R, relays to rank F; shards up to 4096 KiB by RDMA writes";
+6,147 pages, 1.5 GiB prompt cache, smoke test passed. GO-3 measured below.
+
+**GO-3 measured (23:20-23:45 local, spark5's harness; docs/speed/tp4/fp8-roce-acc{A,B}.log, fp8-roce-bench2.log,
+fp8-roce-acc8.log, quality-fp8-roce-tp4.log) against the FP8 NCCL numbers of 21:00-23:05 on image cb33a3d5fc68:**
+
+| | FP8, NCCL gathers | FP8, ring gathers (0108) |
+|---|---|---|
+| 1 stream prose / code, tok/s | 44.6-44.8 / 65.1-65.2 | 45.5-45.7 / 66.0-66.3 (+2.0% / +1.6%) |
+| ms/round prose / code | 48.4 / 63.9 | 47.3-47.5 / 62.8-63.1 (about 1 ms a round) |
+| 4 streams prose, total | 83-87 | 85.2-88.5 |
+| 6 / 8 streams, total | 98-100 / 112-114 | 99.9-101.3 / 112.8-116.3 |
+| prefill 16K / 64K, tok/s | 1746 / 1787 | 1658 / 1770 |
+| hashes prose / code | b363136de28e / d240a39d8c68 | the same |
+| 4-passage NLL, answers_sha | 0.74246848208233, 25789b7aa3d9 | the same to every digit |
+| rank logs | | no ring failure, no poison, no fallback on any rank |
+
+**A/B on the same image (23:50-00:15 local; `./start-tp4.sh restart` with `ROCE_RING` off on 5d37e5287d7b;
+docs/speed/tp4/fp8-nccl-ab-acc.log, fp8-nccl-ab-bench2.log):**
+
+| | NCCL gathers (same image) | ring gathers | delta |
+|---|---|---|---|
+| 1 stream prose / code (acc.py) | 45.0 / 65.2-65.3 | 45.5-45.7 / 66.0-66.3 | +1.1-1.6% / +1.2-1.7% |
+| 1 stream prose / code (bench2) | 44.7 / 65.0 | 45.7 / 66.4 | +2.2% / +2.0% |
+| 4 streams prose (acc.py) | 80.7-82.6 | 85.2-88.5 | +5-7% |
+| conc4 (bench2) | 82.5 | 85.4 | +3.5% |
+| prefill 16K / 64K | 1651 / 1747 | 1658 / 1770 | the same (the earlier -5% was prompt-length noise) |
+| hashes | b363136de28e / d240a39d8c68 | the same | |
+
+The gather sections' saving landed where the device test put it: about 1 ms of a 48 ms round at one stream (roughly
+94 gathers a round at 8-10 us less each), not Codex's 6-8 ms, because NCCL's in-engine cost per gather was never
+109 us (the profile's gather sections hold the ranks' skew, which the ring does not remove). The gain grows with
+streams (the gathers are larger and more of the round waits on them): 5-7% at four. Verdict by the pre-registered
+line (a one-stream gain under 3%): the patch stays a candidate and `ROCE_RING` stays off by default; the image with
+it (5d37e5287d7b) is on all four Sparks, the knob works, bytes, hashes and NLL are exact and nothing measured is
+slower, so `ROCE_RING=on` is the user's free 1-7% whenever they want it (the serve runs with it on since 00:20).
+
+## Baseten's "How to make flash models even faster" (DeepSeek V4.1 Flash) read against this engine (2026-11-04, 23:20 local)
+
+The article's three levers (kernel fusion, PDL, host-loop minimization by CUDA graphs) against the FP8 TP=4 decode
+profile (docs/speed/tp4/fp8-prof.txt: 48 ms a round, 36.6 ms in GPU sections):
+- PDL: the engine has it (TF_GLM_PDL_CHAIN: glm_mm, the EXL3 expert kernels, hc glue, the grouped select), but on
+  FP8 the router section's kernels (router_part, slice_sum's neighbours, topk) and the FP8 expert kernel launch
+  without the attribute, and fp8_experts.cu has no griddepcontrol at all. Routed is the biggest section (17.5 ms).
+  About four bare launches a layer over 46 layers at the 5-9 us a dependent launch won on the EXL3 path: 1-2 ms,
+  2-4% of the round. Kernel-local, low risk, measured by the profiler. Candidate: FP8 launches on the chain.
+- Fusion: the router section is 2.47 ms for two rows (54 us a layer for a tiny gate matmul, a slice sum and a
+  top-k); Baseten's fused router saved them 2.7 ms. KDA fusion lost today (its floor is bytes) and the experts are
+  byte-bound, so a fused MoE buys little here; one kernel a layer for gate, sum and select is the fusion target
+  (up to 5%).
+- Host loop / graphs: the GLM path captures no graphs. The host is Zig (9.5 ms of enqueue wall a call, ahead of a
+  36.6 ms GPU chain), so launch cost is not what the GPU waits on; the 11 ms outside the sections is the drafter
+  pass, the sampling readback and commit, and rank skew at the gathers (the ring gather's target). Measure that gap's
+  composition before any graph work.

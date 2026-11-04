@@ -274,7 +274,10 @@ run and the same with drafts off; they are not the pair's tokens (a different pa
 
 Settings beside the pair's: `WORKER2`, `WORKER3`, `MASTER_ADDR`, `SOCKET_IFNAME`, `PREFILL_REDUCE` (`gather`; `ring`
 stops at the ranks' first point-to-point send on this fabric, where NCCL picks a port without the peer),
-`RING_NCCL_ALGO` (`Ring`), `NFS_MODEL_PATH`, `NFS_DFLASH2_PATH`, `NFS_SERVER1..3`. Logs: `logs/current/rank0..3.log`.
+`RING_NCCL_ALGO` (`Ring`), `ROCE_RING` (`off`; `on` carries the decode and verify all-gathers up to `ROCE_MAX_KB` as
+one-shot RDMA writes to both neighbours, each relaying half a shard to the rank across: engine patch 0108, a candidate
+until its gates in docs/speed/RESULTS.md are met), `NFS_MODEL_PATH`, `NFS_DFLASH2_PATH`, `NFS_SERVER1..3`. Logs:
+`logs/current/rank0..3.log`.
 
 ### Block FP8 weights (`FP8=1`: Z.AI's own release), four Sparks only
 

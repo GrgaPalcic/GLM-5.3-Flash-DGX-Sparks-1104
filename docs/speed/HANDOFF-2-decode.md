@@ -44,8 +44,17 @@ on spark3 (its local.sh untouched) once the four ranks are down. Check rank 0's 
 Since 22:30 local the four Sparks serve **unsloth/GLM-5.3-Flash-FP8** instead (`FP8=1 ./start-tp4.sh` on spark1, image
 `cb33a3d5fc68` = 107 patches with 0107 block FP8, reserve 9.5): startup line "6147 pages", "prompt cache: 1.2 GiB".
 `./start-tp4.sh restart` without FP8=1 goes back to the EXL3 pack on the same image. RESULTS.md "Block FP8 on the
-ring" has the gates, the numbers, the decode profile, the DeepSeek-recipe levers and Codex's RoCE-ring design (the
-next candidate, days of work, the user's call).
+ring" has the gates, the numbers, the decode profile, the DeepSeek-recipe levers and Codex's RoCE-ring design.
+
+Since 00:20 local (2026-11-05) the image is `5d37e5287d7b` (108 patches: 0108, the four-rank RoCE ring all-gather)
+on all four Sparks and the FP8 serve runs with `ROCE_RING=on`: same-image A/B +1-2% at one stream, +5-7% at four,
+prefill, hashes and NLL identical, no ring warning in any rank log. The knob's default stays off (the pre-registered
+one-stream line was 3%; RESULTS.md "The four-rank RoCE ring all-gather"). Boot time: every FP8 boot before 00:20 ran
+with `TF_GLM_LOAD_PREFETCH=0` and took 686-742 s, set by spark3 (two NFS hops, page-fault reads); the EXL3 boots with
+the default 8 readers loaded in ~2 min. Leave the knob alone on FP8 boots (RESULTS.md records the measured load
+with readers on). Next engine levers, in order (RESULTS.md "Baseten's ... read against this engine"): the FP8
+router and expert launches onto the PDL chain (1-2 ms a round), a fused router (up to 2.5 ms), then the 11 ms
+outside the GPU sections (measure its composition first).
 
 ## What shipped (all exact, on image `cd1de29726c3`, both Sparks; **superseded 2026-11-04 13:20 by image `1fdae27149cc` (104 patches: 0103 tool-parse fix, 0104 warm turns, both ported from the rtx recipe, plus MEMORY_RESERVE_GIB 9.5 in scripts/local.sh) and at 15:10 by `8c4ca7bd8c39` (105 patches: 0105, untyped tool parameters decode as the JSON object the model wrote - the sibling recipe's issue #180) - RESULTS.md 2026-11-04 12:00, 13:20 and 15:30 sections; A serves 8c4ca7bd8c39 now (an upstream lane fix tried as 0106 at 15:30 was killed: rounds 50% longer, a ghost stream; RESULTS.md). Pair B (spark1+2) was STOPPED by the user at 13:35 after the Python-engine comparison and is down.**)
 

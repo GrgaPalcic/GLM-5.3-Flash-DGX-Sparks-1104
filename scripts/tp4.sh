@@ -357,6 +357,14 @@ tp4_rank_env() {
              -e NCCL_RUNTIME_CONNECT=1 -e NCCL_CUMEM_ENABLE=1 -e NCCL_CUMEM_HOST_ENABLE=0
              -e "NCCL_MIN_NCHANNELS=$NCCL_CHANNELS" -e "NCCL_MAX_NCHANNELS=$NCCL_CHANNELS")
   [[ -z "$RING_PREFIX" ]] || RANK_ENV+=(-e "NCCL_IB_SUBNET_PREFIX_LEN=$RING_PREFIX")
+  if [[ "$ROCE_RING" == on ]]; then
+    # the engine's ring all-gather: TF_ROCE_HCA names the device toward the previous rank, then the one toward the next
+    local -a tprev=() tnext=()
+    IFS=, read -r -a tprev <<<"${TOWARD[$r $(( (r + 3) % 4 ))]:-}"
+    IFS=, read -r -a tnext <<<"${TOWARD[$r $(( (r + 1) % 4 ))]:-}"
+    (( ${#tprev[@]} && ${#tnext[@]} )) || fail E_FABRIC "rank $r has no RoCE device toward both neighbours; set ROCE_RING=off."
+    RANK_ENV+=(-e TF_ROCE=1 -e TF_ROCE_RING=1 -e "TF_ROCE_HCA=${tprev[0]},${tnext[0]}")
+  fi
   RANK_MOUNTS=(-v "${NODE_GRAPH[r]}:/nccl-graph.xml:ro")
 }
 

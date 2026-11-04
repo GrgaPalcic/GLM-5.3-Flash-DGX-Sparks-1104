@@ -90,6 +90,11 @@ SOCKET_IFNAME="${SOCKET_IFNAME:-}"
 # neighbours, no point-to-point sends (the qualified mode here); ring: split, its exchanges passed along the ring.
 PREFILL_REDUCE="${PREFILL_REDUCE:-gather}"
 RING_NCCL_ALGO="${RING_NCCL_ALGO:-Ring}"         # NCCL_ALGO on the ring: Ring sends only to the next rank
+# ROCE_RING=on: the decode and verify all-gathers up to ROCE_MAX_KB a rank as one-shot RDMA writes to both
+# neighbours, each relaying half of a shard to the rank across (engine patch 0108, TF_ROCE_RING=1, TF_ROCE_HCA naming
+# the device toward the previous rank then the one toward the next); every rank must bring it up or all four fall
+# back to NCCL together. off (the default until it is measured): NCCL carries every exchange.
+ROCE_RING="${ROCE_RING:-off}"
 # The checkpoint and drafter paths as the NFS server on this Spark exports them, when they differ from MODEL_DIR and
 # DFLASH2_DIR (an NFS server in a container exports its own view: /huggingface/... for /home/you/.cache/huggingface/...).
 NFS_MODEL_PATH="${NFS_MODEL_PATH:-}"
