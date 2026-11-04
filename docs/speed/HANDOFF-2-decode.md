@@ -47,7 +47,9 @@ Since 22:30 local the four Sparks serve **unsloth/GLM-5.3-Flash-FP8** instead (`
 ring" has the gates, the numbers, the decode profile, the DeepSeek-recipe levers and Codex's RoCE-ring design.
 
 Since 00:20 local (2026-11-05) the image is `5d37e5287d7b` (108 patches: 0108, the four-rank RoCE ring all-gather)
-on all four Sparks and the FP8 serve runs with `ROCE_RING=on`: same-image A/B +1-2% at one stream, +5-7% at four,
+on all four Sparks. **Live since 01:05 (2026-11-05): the EXL3 pack, the default (`./start-tp4.sh`), 16392 pages, 3.1 GiB
+prompt cache, loaded in 135 s, 56.2 / 85.6 tok/s, the known hashes; `FP8=1` stays the opt-in and `ROCE_RING=on` the
+opt-in gather path.** The FP8 serve with `ROCE_RING=on` (00:20-01:00) measured: same-image A/B +1-2% at one stream, +5-7% at four,
 prefill, hashes and NLL identical, no ring warning in any rank log. The knob's default stays off (the pre-registered
 one-stream line was 3%; RESULTS.md "The four-rank RoCE ring all-gather"). Boot time: every FP8 boot before 00:20 ran
 with `TF_GLM_LOAD_PREFETCH=0` and took 686-742 s, set by spark3 (two NFS hops, page-fault reads); the EXL3 boots with
