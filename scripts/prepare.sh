@@ -111,6 +111,9 @@ validate_config() {
     [[ "$path" == /* && "$path" != *:* && "$path" != *$'\n'* && "$path" != *,* ]] || fail E_CONFIG "$key must be an absolute path without colons, commas or newlines."
   done
   [[ "$ABLIT" =~ ^[01]$ ]] || fail E_CONFIG 'ABLIT must be 0 or 1.'
+  [[ "$FP8" =~ ^[01]$ ]] || fail E_CONFIG 'FP8 must be 0 or 1.'
+  [[ "$FP8" == 0 || "$ABLIT" == 0 ]] || fail E_CONFIG 'FP8=1 and ABLIT=1 name two checkpoints: set one.'
+  [[ "$FP8" == 0 || "${GLM_TP4:-0}" == 1 ]] || fail E_CONFIG 'FP8=1 (the ~306 GiB block FP8 release) fits four Sparks only: use ./start-tp4.sh.'
   [[ "$ABLIT" == 0 || "$MODEL_SOURCE" == download ]] || fail E_CONFIG 'ABLIT=1 fetches the Ablit weights, so it needs MODEL_SOURCE=download. To serve a copy you already have, set ABLIT=0, MODEL_SOURCE=local and MODEL_DIR.'
   [[ "$MODEL_SOURCE" != download || -n "$MODEL_REVISION" ]] || fail E_CONFIG "MODEL_ID=$MODEL_ID has no pinned revision: set MODEL_REVISION."
   # A download never overwrites another checkpoint or revision: their files share names, so the result would be a mix.
@@ -344,6 +347,10 @@ if not glob.glob(os.path.join(d, "*.safetensors")):
 if not os.path.exists(os.path.join(d, "tokenizer.json")):
     print("E_MODEL\tno tokenizer.json"); sys.exit()
 method = q.get("quant_method", "none")
+if method == "fp8":
+    bs = q.get("weight_block_size"); fmt = q.get("fmt", "e4m3")
+    vision = "vision" if c.get("vision_config") else "no vision tower"
+    print(f"OK\tblock FP8 ({fmt}, {bs[0]} x {bs[1]} scales) experts and linears, {vision}\t0" if isinstance(bs, list) and len(bs) == 2 else f"E_MODEL\tfp8 without a weight_block_size: the engine reads 128 x 128 block scales"); sys.exit()
 if method != "exl3":
     print(f"W_MODEL\t{method} checkpoint: the recipe is written for EXL3; served as stored\t0"); sys.exit()
 bits = q.get("bits"); avg = q.get("avg_bits")

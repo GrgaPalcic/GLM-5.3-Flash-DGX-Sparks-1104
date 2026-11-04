@@ -1,7 +1,9 @@
 # Changelog
 
 - **2026-11-04** -- `0107`: block FP8 checkpoints (`quant_method: fp8`, e4m3, 128 x 128 scales) load on this engine:
-  `unsloth/GLM-5.3-Flash-FP8` serves at TP=4 on the four-Spark ring (README "Block FP8 weights"), ~81 GiB a rank, NLL
+  `FP8=1 ./start-tp4.sh` serves Z.AI's own release `zai-org/GLM-5.3-Flash` @ `46a050be` (the model is published in
+  block FP8; `unsloth/GLM-5.3-Flash-FP8` is its byte-identical mirror, the copy this kit measured) at TP=4 on the
+  four-Spark ring (README "Block FP8 weights"), ~81 GiB a rank, NLL
   0.7425 against the EXL3 pack's 0.7487, decode 44.7 / 65.2 tok/s prose / code at one stream against 56 / 85 (twice
   the expert bytes a round), prefill the same. The routed experts take the engine's existing block-FP8 expert kernels;
   every other quantized linear its block-FP8 lane; `weight_scale_inv` is read as the scale. Reviewed with Codex before

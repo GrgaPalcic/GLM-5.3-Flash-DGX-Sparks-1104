@@ -276,15 +276,17 @@ Settings beside the pair's: `WORKER2`, `WORKER3`, `MASTER_ADDR`, `SOCKET_IFNAME`
 stops at the ranks' first point-to-point send on this fabric, where NCCL picks a port without the peer),
 `RING_NCCL_ALGO` (`Ring`), `NFS_MODEL_PATH`, `NFS_DFLASH2_PATH`, `NFS_SERVER1..3`. Logs: `logs/current/rank0..3.log`.
 
-### Block FP8 weights (unsloth/GLM-5.3-Flash-FP8), four Sparks only
+### Block FP8 weights (`FP8=1`: Z.AI's own release), four Sparks only
 
-Engine patch `0107` reads `quant_method: fp8` checkpoints with e4m3 codes and 128 x 128 block scales (Z.AI's and
-unsloth's layout): the routed experts on the engine's block-FP8 expert kernels, the dense MLPs, shared experts and the
-DSA layers' projections on its block-FP8 lane, the rest bf16 as stored. The scale tensor may be `weight_scale` or
-`weight_scale_inv`. Another block size, a per-tensor FP8 or another code format is refused by name. Point `MODEL_ID`,
-`MODEL_REVISION`, `MODEL_DIR` (and `NFS_MODEL_PATH`) at the FP8 checkpoint; ~306 GiB on spark1, ~81 GiB of weights a
-rank, so it fits only at TP=4 and leaves three 1M-token windows (3.1M tokens of KV) and a ~1 GiB prompt cache at
-`MEMORY_RESERVE_GIB=9.5`. Measured on this kit (greedy, same harness, image `cb33a3d5fc68`):
+`FP8=1 ./start-tp4.sh` serves `zai-org/GLM-5.3-Flash` @ `46a050be`, the model as Z.AI publishes it: block FP8, e4m3
+codes with 128 x 128 scales, ~306 GiB (`unsloth/GLM-5.3-Flash-FP8` is a byte-identical mirror; both pins are in
+`scripts/config.sh`). Engine patch `0107` reads it: the routed experts on the engine's block-FP8 expert kernels, the
+dense MLPs, shared experts and the DSA layers' projections on its block-FP8 lane, the rest bf16 as stored; the scale
+tensor may be `weight_scale` or `weight_scale_inv`; another block size, a per-tensor FP8 or another code format is
+refused by name. It downloads into `DATA_DIR/model-fp8` when missing (or set `MODEL_DIR` and `NFS_MODEL_PATH` to a copy
+you have); ~81 GiB of weights a rank, so it fits only at TP=4 and leaves three 1M-token windows (3.1M tokens of KV)
+and a ~1 GiB prompt cache at `MEMORY_RESERVE_GIB=9.5`. Measured on this kit (greedy, same harness, image
+`cb33a3d5fc68`):
 
 | | EXL3 4-bit, TP=4 | FP8, TP=4 |
 | --- | ---: | ---: |

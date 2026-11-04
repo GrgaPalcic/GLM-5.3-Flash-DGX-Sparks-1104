@@ -124,11 +124,19 @@ ABLIT="${ABLIT:-0}"
 ABLIT_ID="Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit"
 _id="Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold"; _dir=model
 if [[ "$ABLIT" == 1 ]]; then _id=$ABLIT_ID; _dir=model-ablit; fi
+# FP8=1 serves Z.AI's own release, zai-org/GLM-5.3-Flash, which is published in block FP8 (e4m3 codes, 128 x 128 scales;
+# ~306 GiB, engine patch 0107; README "Block FP8 weights"). It fits four Sparks only (./start-tp4.sh): ~81 GiB of
+# weights a rank. unsloth/GLM-5.3-Flash-FP8 is a byte-identical mirror of it (every shard's sha256 the same).
+FP8="${FP8:-0}"
+FP8_ID="zai-org/GLM-5.3-Flash"
+if [[ "$FP8" == 1 ]]; then _id=$FP8_ID; _dir=model-fp8; fi
 MODEL_ID="${MODEL_ID:-$_id}"
 # The pins belong to the checkpoints above; another MODEL_ID needs its own MODEL_REVISION.
 case "$MODEL_ID" in
   Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold) _rev=76c0b5173166d2795dd48860f45d8224817f894c ;;
   "$ABLIT_ID") _rev=57edefd2f5d9b371c8345883304d5af68b52fa24 ;;
+  "$FP8_ID") _rev=46a050bec13002ad29ee795c16e61cf4fa3c4a9c ;;
+  unsloth/GLM-5.3-Flash-FP8) _rev=a160e2291674d9e3e92e98fd82faa2544a2867a3 ;;   # the mirror, the same bytes
   *) _rev="" ;;
 esac
 MODEL_REVISION="${MODEL_REVISION:-$_rev}"
