@@ -1649,3 +1649,17 @@ ten greedy answers byte-identical to EXL3's (which equal the pair's, sha 11ceddd
 7 IS prime). Let me list the primes ...") cut at the answer limit. Within the pre-registered gate (NLL not worse,
 no garbage), noted as the one visible behavioural difference of the FP8 math (bf16 activations x widened e4m3, per
 Codex) on these ten prompts. "necessary" backwards is right.
+
+**GO-2 speed and repeatability on FP8 (docs/speed/tp4/fp8-acc{A,B}.log, fp8-draft.log):** two acc.py runs give the
+same hashes (prose `b363136de28e`, code `d240a39d8c68`); drafts off equals drafts on. Greedy, against the EXL3 pack on
+the same four Sparks:
+
+| | EXL3 4bpw (TP=4) | FP8 (TP=4) |
+|---|---|---|
+| 1 stream prose / code | 56.0-56.2 / 84.5-85.3 tok/s | 44.6-44.8 / 65.1-65.2 (ms/round 48.4 / 63.9; accepted 59% / 78%) |
+| 4 streams prose, total | 115-120 | 83-87 |
+| weights a rank / KV pool | 45.6 GiB / 8.4M tokens | 80.7 GiB / 3.0M tokens |
+| 4-passage NLL | 0.7487 | 0.7425 |
+
+FP8 decodes ~20% slower than the 4-bit pack (twice the expert bytes a round, bf16 x widened e4m3 on the tensor
+cores) and scores better on the held passages; the pair at TP=2 (38.4 / 56.6) stays below both.
