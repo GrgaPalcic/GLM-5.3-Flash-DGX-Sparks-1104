@@ -1690,3 +1690,15 @@ of the same kind as pair B's 0102/0104 (own front, micro-batches: +9-13% prefill
 GLM family lacks; CUDA-graph replay of decode rounds (their GRAPHS=1) this GLM path does not do (PDL chain instead).
 Prefill at TP=4 (1,750-1,890) barely above TP=2 (1,600-1,800): exchange-bound, the engine's own PREFILL_REDUCE=ring
 is the first cheap test (running).
+
+**Codex on the four-rank RoCE ring gather (docs/speed/codex-roce-ring.md):** pre-register design (1), the engine's
+two-rank one-shot protocol (roce.zig) extended for an explicitly enabled ring of four in a sibling module: each rank
+writes its whole shard to both neighbours, each neighbour forwards one logical half to the rank across, six flags a
+gather (two from each of three sources), the same stage / doorbell / proxy / flags / rank-order copy / device epoch
+sequence. Expected 20-40 us a 16 KiB-a-rank gather against NCCL's ~109: with ~90 eligible calls a round, 6-8 ms of
+the 48 ms FP8 round (about a fifth). Effort 4-7 person-days plus 1-3 hardware days; design (3), two matched two-rank
+gathers in alternating pairs ((0,1),(2,3) then (0,3),(1,2); 30-50 us; 2-4 days) is the fallback; adapting
+fabric/tp's roce_multi (2) costs the most integration. The traps it lists (relay lifetime and retirement, per-hop
+ordering, immutable half ownership, poison and abort through tp_watch, u32 epoch rollover, one device a cable in
+TF_ROCE_HCA with a GID each) and the test plan (fake wire with planted controls, a four-rank tf-cuda-test roce-gather)
+are in the file. Not started: a decision for the user (days of engine work for ~15% of a decode round).
