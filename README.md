@@ -290,6 +290,7 @@ rank, so it fits only at TP=4 and leaves three 1M-token windows (3.1M tokens of 
 | --- | ---: | ---: |
 | 1 stream, prose / code | 56.1 / 85.0 tok/s | 44.7 / 65.2 tok/s |
 | 4 streams, prose, total | 115-120 tok/s | 83-87 tok/s |
+| 8 streams, prose, total | 163-166 tok/s | 112-114 tok/s |
 | prefill 16K / 64K | 1,752 / 1,889 tok/s | 1,746 / 1,787 tok/s |
 | 4-passage NLL (`docs/quality.py`) | 0.7487 | 0.7425 |
 

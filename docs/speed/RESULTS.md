@@ -1711,3 +1711,7 @@ Both the DeepSeek 4x recipe (two-rank link communicators per cable, TF_DS_LINK_G
 solved it with a communicator per cable carrying its own graph file; this engine's cuda_relay sends on the world
 communicator. So `gather` stays the TP=4 default and the prefill lever is engine work: either per-link communicators
 for cuda_relay's ring (the lab's design) or own-front / micro-batch style exchange cuts. The server is back on gather.
+
+**Back on gather (23:05 local): 6,147 pages, 1.3 GiB prompt cache. FP8 at 6 / 8 streams (docs/speed/tp4/fp8-acc8.log):
+98-100 / 112-114 tok/s total (per stream 16-17 / 13-16; ms/round 125 / 145) against EXL3's 139-141 / 163-166.**
+The FP8 serve is the live state; the EXL3 pack returns with `./start-tp4.sh restart` without FP8=1.
