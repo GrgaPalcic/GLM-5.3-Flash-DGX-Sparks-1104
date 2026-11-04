@@ -1597,3 +1597,36 @@ Decode +46% at one stream, +48% at four, +55% at eight; prefill about the pair's
 hops). Available memory after the benches: spark1 12.2 GiB, spark2 14.0, spark3 11.9, spark4 14.2. Not measured yet:
 PREFILL_REDUCE=ring (the split prefill's rows passed along the ring; the engine's own neighbours-only mode) against
 gather, sampled decode at T=0.7, and a long soak. 0106 is in patches/engine; the served image is 74e19a63a9a5 on all four Sparks (daa6f2cde063 is the same code under the earlier label).
+
+## Block FP8 on the ring: unsloth/GLM-5.3-Flash-FP8 at TP=4, candidate 0107 pre-registered (2026-11-04, 20:10-21:00 local)
+
+**The ask:** serve `unsloth/GLM-5.3-Flash-FP8` (a160e229: quant_method fp8, e4m3, 128 x 128 block scales, 62 shards,
+305.8 GiB) at TP=4. The engine admitted only ModelOpt NVFP4, MIXED_PRECISION and EXL3; its generic expert layer
+already had a block-FP8 format (fp8g, fp8_experts.cu, decode and prompt kernels, used by other families), and GLM's
+lane already read block-FP8 projections (fp8_pb) for the shared expert and the DSA projections of ModelOpt mixed
+checkpoints. **Codex (docs/speed/codex-fp8.md, the brief beside it)** confirmed the plan and corrected three things:
+admission must come before config.parse (it does, cuda_engine.zig), the dense MLP needs its own FP8 arm (added), and
+patch 0014 keeps the target MTP layer out beside DFlash2 (so its FP8 experts load only in plain MTP mode). It also
+said: the fp8g kernels compute bf16 activations x widened e4m3 weights with fp32 accumulation and the block scale
+applied per 128-input block (no dynamic activation quantizer: storage support, not equivalence to vLLM's W8A8 math);
+the prompt kernel is complete; no sm_121 refusal; the checkpoint's router/bias and the shared slot need nothing;
+staging per layer could be leaner (left as the NVFP4 path has it); TF_GLM_LOAD_PREFETCH=0 for the first boot.
+
+**Candidate 0107** (docs/speed/candidates/0107-glm-cuda-block-FP8-checkpoints-...patch): cuda_fp8block.zig (admission:
+fp8, e4m3, [128, 128], else refused by name; tests), config.fp8, formats.Declared.fp8_block (bf16 or fp8_pb, never
+NVFP4/MXFP8; test), formats.scaleName (weight_scale or weight_scale_inv) used by both the format probe and the
+reader, cuda_weights.fp8Experts (the rank's 512 rows of gate/up, 512 inputs of down, Fp8Experts.packGateUp/packOne,
+scales [E][2][4][32] and [E][1][32][4]), Kernels.fp8 beside nvfp4 with Grouped dispatch by format, the dense MLP's
+fp8g arm, the tiler's exclusion, 128-row expert shards. Download of the checkpoint to spark1's exported cache
+(`~/.cache/huggingface/glm53-fp8/model`, pinned) ran at ~250 MB/s.
+
+**Pre-registered gates (FP8=1 ./start-tp4.sh on spark1, image with 0107, gather, reserve 12, PARALLEL=8, CONTEXT=auto):**
+- GO-1 (boot): all four ranks load (no UnreadableFormat / FormatNotLoaded / BadFp8Share / RankMismatch), rank 0's
+  startup line shows the weights at ~80 GiB a rank, 8 streams, 2 to 4 1M windows and a prompt cache above 0; the
+  smoke passes; `TF_CUDA_MEMORY_RECEIPTS=1` receipts kept.
+- GO-2 (quality): greedy acc.py twice gives the same hashes; drafts off equals drafts on; the paired per-token NLL on
+  the held passages (the harness used for the DENSE/HEAD/ABSORB gates) at most equal to the EXL3 TP=4 pack's within
+  noise, expected better (FP8 against 4 bpw); the ten greedy answers read as answers (the "spell necessary backwards"
+  check included).
+- KILL: a rank that refuses the checkpoint, garbage or repeated-character output, an NLL worse than EXL3's by more
+  than 0.02 nats a token, or a memory floor under 5 GiB on any Spark after a 100K prefill. Speed is recorded only.
