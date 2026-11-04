@@ -1630,3 +1630,22 @@ fp8g arm, the tiler's exclusion, 128-row expert shards. Download of the checkpoi
   check included).
 - KILL: a rank that refuses the checkpoint, garbage or repeated-character output, an NLL worse than EXL3's by more
   than 0.02 nats a token, or a memory floor under 5 GiB on any Spark after a 100K prefill. Speed is recorded only.
+
+**0107 built and the FP8 checkpoint served on the first boot (image cb33a3d5fc68 = 107 patches; 21:35 local).**
+Cold host tests on spark5 (docs/speed/tp4/hosttest-fp8.log): the four targets compile and pass but for the three
+known cuda-host steps (and the FP8-KV runner flake: its binary passes 20/20 run directly). The download finished at
+306 GiB (62 shards, `.revision` a160e229), the workers see it over NFS. `FP8=1 TF_GLM_LOAD_PREFETCH=0
+TF_CUDA_MEMORY_RECEIPTS=1 ./start-tp4.sh` on spark1: admitted, every rank's digest (305.8 GiB; rank 2 over NFS through
+spark2 in 134.5 s), the FP8 experts packed and uploaded, loaded in 757.5 s, smoke "ready". Rank 0's startup line:
+**model 80.70 GiB a rank** (projected ~80), 8 streams, **5,871 pages = 3.0M tokens** (17.86 GiB) of 20.1 GiB left
+after the 12 GiB reserve, **no prompt cache** ("cannot keep one state": the minimum state is 0.17 GiB; to be fixed by
+the reserve, below). Each rank's NCCL connects only to its two neighbours; no refusal, no FormatNotLoaded. Idle
+memory: spark1 13.1 GiB available, spark2 14.9, spark3 12.4, spark4 14.9.
+
+**GO-2 quality (docs/speed/tp4/quality-fp8-tp4.log against quality-exl3-tp4.log, both at TP=4):** 4-passage NLL
+**0.7425 against EXL3's 0.7487 (-0.0063; three passages better, the mitochondrion one 0.518 -> 0.555)**; nine of the
+ten greedy answers byte-identical to EXL3's (which equal the pair's, sha 11ceddde19d4), the exception "What is the
+7th prime number? Number only." - EXL3 "17", FP8 a rambling enumeration ("7 is not prime (7 = 1 x 7, wait, actually
+7 IS prime). Let me list the primes ...") cut at the answer limit. Within the pre-registered gate (NLL not worse,
+no garbage), noted as the one visible behavioural difference of the FP8 math (bf16 activations x widened e4m3, per
+Codex) on these ten prompts. "necessary" backwards is right.
