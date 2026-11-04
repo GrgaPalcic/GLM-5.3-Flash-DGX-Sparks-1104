@@ -1670,3 +1670,23 @@ bound by the expert bytes. conc2 64.5 total, conc4 83.5; mixed1 decoder 52.9 bef
 prefill (gap p95 72 ms, max 2.8 s); a 30K pair 35.3 s and 22.1 s against 17.5 s alone. Lowest available memory during
 the bench: spark1 12.3 GiB, spark2 14.3, spark3 11.9, spark4 14.3 (the KILL floor was 5): the reserve goes to 9.5 on
 the next restart, as on the pair, for a prompt cache.
+
+**Restart at reserve 9.5 (22:20 local):** rank 0's line: model 80.70 GiB, 8 streams, **6,147 pages = 3.15M tokens**
+(three 1M windows, 18.70 GiB) and a **1.2 GiB prompt cache** a rank, no "cannot keep" warning: the projection held.
+
+**Where an FP8 decode round goes (TF_GLM_PROF=1 on this restart; rank 2's report, 64 verify calls of 2 draft rows
+each, greedy prose then code, docs/speed/tp4/fp8-prof.txt):** GPU 36.6 ms a call: routed experts **17.5 ms (48%)**,
+KDA 7.0, MLA 3.4, the two NCCL all-gathers a layer **gather_a 2.26 + gather_b 2.33 = 4.6 ms (12.5%)**, router 2.5,
+head 0.7, dense 0.65, shared 0.3; the harness's 48 ms a round leaves ~11 ms outside the GPU sections (host launches,
+the lane, the sampler's exchange). Reading: with two draft rows a layer touches up to 16 distinct experts, 96 MiB of
+e4m3 a rank a layer, 4 GiB a round, which at the GB10's bandwidth is ~20 ms: the routed section is byte-bound, and
+the FP8 pack pays twice EXL3's bytes there (EXL3's round is 37 ms). The DeepSeek 4x recipe's levers mapped onto this
+stack: its expert path is MXFP4 (4-bit, not FP8), so its decode numbers do not say FP8 can match a 4-bit pack; its
+RDMA ring relay for the decode gathers (RDMA=1, their patch 0001; the lab's older Python-engine 0099) would attack the
+4.6 ms of NCCL gathers (plus part of the host gap), ~5-10% of a round at one stream; its side stream, PDL and profiler
+we have (0006/0010, TF_GLM_PDL_CHAIN all, TF_GLM_PROF); its L2 prefetch of the next layer's weights during the
+exchanges (pair B's 0046) we do not; its quarter-HC / owner-gather and indexer sharding (WP4-WP6) are prefill levers
+of the same kind as pair B's 0102/0104 (own front, micro-batches: +9-13% prefill on this ring), which this engine's
+GLM family lacks; CUDA-graph replay of decode rounds (their GRAPHS=1) this GLM path does not do (PDL chain instead).
+Prefill at TP=4 (1,750-1,890) barely above TP=2 (1,600-1,800): exchange-bound, the engine's own PREFILL_REDUCE=ring
+is the first cheap test (running).
