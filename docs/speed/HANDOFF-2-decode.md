@@ -51,8 +51,8 @@ on all four Sparks and the FP8 serve runs with `ROCE_RING=on`: same-image A/B +1
 prefill, hashes and NLL identical, no ring warning in any rank log. The knob's default stays off (the pre-registered
 one-stream line was 3%; RESULTS.md "The four-rank RoCE ring all-gather"). Boot time: every FP8 boot before 00:20 ran
 with `TF_GLM_LOAD_PREFETCH=0` and took 686-742 s, set by spark3 (two NFS hops, page-fault reads); the EXL3 boots with
-the default 8 readers loaded in ~2 min. Leave the knob alone on FP8 boots (RESULTS.md records the measured load
-with readers on). Next engine levers, in order (RESULTS.md "Baseten's ... read against this engine"): the FP8
+the default 8 readers loaded in ~2 min. With the knob left alone the FP8 boot loads in 245 s (RESULTS.md "The FP8
+boot: 742 s to 245 s"); never set it to 0 again. Next engine levers, in order (RESULTS.md "Baseten's ... read against this engine"): the FP8
 router and expert launches onto the PDL chain (1-2 ms a round), a fused router (up to 2.5 ms), then the 11 ms
 outside the GPU sections (measure its composition first).
 

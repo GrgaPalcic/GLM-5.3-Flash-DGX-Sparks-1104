@@ -1818,3 +1818,27 @@ profile (docs/speed/tp4/fp8-prof.txt: 48 ms a round, 36.6 ms in GPU sections):
   36.6 ms GPU chain), so launch cost is not what the GPU waits on; the 11 ms outside the sections is the drafter
   pass, the sampling readback and commit, and rank skew at the gathers (the ring gather's target). Measure that gap's
   composition before any graph work.
+
+## The FP8 boot: 742 s to 245 s by leaving the loader's read-ahead on (2026-11-04/05, 00:20-00:50 local)
+
+The user asked whether weight loading could be faster. Every FP8 boot today ran with `TF_GLM_LOAD_PREFETCH=0` (a
+first-boot caution carried from the 0107 notes), so the loader faulted each page in on its own; over NFS that is
+latency-bound, worst for spark3 (two hops). The ring boot of 20:31 (rank logs in the archive of 20:56Z):
+
+| rank | source | digest | load | note |
+|---|---|---|---|---|
+| 0 (spark1) | NVMe | cached | 315 s | |
+| 1, 3 | NFS, one cable | cached | 450 s | |
+| 2 (spark3) | NFS via spark2 | miss: 306 GiB rehashed, 85 s | 649 s | a one-off miss; cached again at the next boot |
+
+Every rank waits after the digests and again before NCCL, so rank 2 set the boot (742 s; the A/B boot 686 s).
+Raw reads are not the limit (a shard reads at 10 GB/s on spark1's NVMe, 2-6 GB/s over NFS with O_DIRECT). The EXL3
+boot of 17:22 ran with the default 8 readers: "8 readers read 156.4 GiB ahead of the loader", loaded in ~2 min.
+
+**Measured:** `FP8=1 ROCE_RING=on ./start-tp4.sh restart` without the knob: every rank "8 readers read 295.4 GiB
+ahead of the loader", **loaded in 245.1 s** (the API answered at ~250 s of the launcher's wait), host memory on the
+two-hop worker 111 GiB used, 10 GiB cached after the load, no pressure. Decode after it (docs/speed/tp4/
+fp8-roce-prefetch-acc.log): 45.6 / 66.0 at one stream, 91.3 at four, the same hashes. So: never set
+`TF_GLM_LOAD_PREFETCH=0` on an FP8 boot. The remaining floor is each rank reading 295 of the checkpoint's 306 GiB:
+a loader that reads only a rank's expert rows (about a quarter of the bytes) is the next load lever, engine work;
+a digest-cache miss costs 85-135 s on top for everyone.
