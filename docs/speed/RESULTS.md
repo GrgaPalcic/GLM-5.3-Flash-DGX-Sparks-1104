@@ -1702,3 +1702,12 @@ fabric/tp's roce_multi (2) costs the most integration. The traps it lists (relay
 ordering, immutable half ownership, poison and abort through tp_watch, u32 epoch rollover, one device a cable in
 TF_ROCE_HCA with a GID each) and the test plan (fake wire with planted controls, a four-rank tf-cuda-test roce-gather)
 are in the file. Not started: a decision for the user (days of engine work for ~15% of a decode round).
+
+**PREFILL_REDUCE=ring: KILLED on this fabric (22:40 local).** With the engine's ring mode the start stops at rank 3's
+first grouped send/receive to its neighbours: `ncclGroupEnd: unhandled system error`. The same failure the lab's older
+recipes met on this ring: a point-to-point send on the world communicator takes a device NCCL picks (subnet-aware
+routing cannot repair the receiver's choice), on a ring cabled port to like port half the time one without that peer.
+Both the DeepSeek 4x recipe (two-rank link communicators per cable, TF_DS_LINK_GRAPHS) and pair B's 0098 (TF_NCCL_RING)
+solved it with a communicator per cable carrying its own graph file; this engine's cuda_relay sends on the world
+communicator. So `gather` stays the TP=4 default and the prefill lever is engine work: either per-link communicators
+for cuda_relay's ring (the lab's design) or own-front / micro-batch style exchange cuts. The server is back on gather.

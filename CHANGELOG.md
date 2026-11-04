@@ -1,5 +1,11 @@
 # Changelog
 
+- **2026-11-04** -- `0107`: block FP8 checkpoints (`quant_method: fp8`, e4m3, 128 x 128 scales) load on this engine:
+  `unsloth/GLM-5.3-Flash-FP8` serves at TP=4 on the four-Spark ring (README "Block FP8 weights"), ~81 GiB a rank, NLL
+  0.7425 against the EXL3 pack's 0.7487, decode 44.7 / 65.2 tok/s prose / code at one stream against 56 / 85 (twice
+  the expert bytes a round), prefill the same. The routed experts take the engine's existing block-FP8 expert kernels;
+  every other quantized linear its block-FP8 lane; `weight_scale_inv` is read as the scale. Reviewed with Codex before
+  and after; the pre-registered gates and the measurements are in docs/speed/RESULTS.md.
 - **2026-11-04** -- CREDITS and NOTICE: the Aevonix entry removed. On reflection it earns no line here: the serving scripts are
   this lab's own (Aevonix's recipe reworked the lab's GLM-5.3-Flash-EXL3-4x-DGX-Sparks-TensorFold scripts, and this recipe's
   copies reach it through the lab's 2x RTX PRO 6000 recipe), the banner was never theirs, and the lab's own 2x RTX PRO 6000

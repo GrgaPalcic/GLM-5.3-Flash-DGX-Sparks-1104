@@ -272,8 +272,31 @@ dense and head, DFlash2; greedy, the same harness as the pair's numbers under [P
 Rank 0 loads 45.6 GiB; each rank's NCCL connects only to its two neighbours. Greedy replies are repeatable run to
 run and the same with drafts off; they are not the pair's tokens (a different partition rounds differently).
 
-Settings beside the pair's: `WORKER2`, `WORKER3`, `MASTER_ADDR`, `SOCKET_IFNAME`, `PREFILL_REDUCE` (`gather`),
+Settings beside the pair's: `WORKER2`, `WORKER3`, `MASTER_ADDR`, `SOCKET_IFNAME`, `PREFILL_REDUCE` (`gather`; `ring`
+stops at the ranks' first point-to-point send on this fabric, where NCCL picks a port without the peer),
 `RING_NCCL_ALGO` (`Ring`), `NFS_MODEL_PATH`, `NFS_DFLASH2_PATH`, `NFS_SERVER1..3`. Logs: `logs/current/rank0..3.log`.
+
+### Block FP8 weights (unsloth/GLM-5.3-Flash-FP8), four Sparks only
+
+Engine patch `0107` reads `quant_method: fp8` checkpoints with e4m3 codes and 128 x 128 block scales (Z.AI's and
+unsloth's layout): the routed experts on the engine's block-FP8 expert kernels, the dense MLPs, shared experts and the
+DSA layers' projections on its block-FP8 lane, the rest bf16 as stored. The scale tensor may be `weight_scale` or
+`weight_scale_inv`. Another block size, a per-tensor FP8 or another code format is refused by name. Point `MODEL_ID`,
+`MODEL_REVISION`, `MODEL_DIR` (and `NFS_MODEL_PATH`) at the FP8 checkpoint; ~306 GiB on spark1, ~81 GiB of weights a
+rank, so it fits only at TP=4 and leaves three 1M-token windows (3.1M tokens of KV) and a ~1 GiB prompt cache at
+`MEMORY_RESERVE_GIB=9.5`. Measured on this kit (greedy, same harness, image `cb33a3d5fc68`):
+
+| | EXL3 4-bit, TP=4 | FP8, TP=4 |
+| --- | ---: | ---: |
+| 1 stream, prose / code | 56.1 / 85.0 tok/s | 44.7 / 65.2 tok/s |
+| 4 streams, prose, total | 115-120 tok/s | 83-87 tok/s |
+| prefill 16K / 64K | 1,752 / 1,889 tok/s | 1,746 / 1,787 tok/s |
+| 4-passage NLL (`docs/quality.py`) | 0.7487 | 0.7425 |
+
+The expert kernels compute bf16 activations against widened e4m3 weights with fp32 accumulation and the block scale
+(no activation quantizer); a decode round reads twice the expert bytes of the 4-bit pack, which is the whole speed
+difference. Greedy replies are repeatable and the same with drafts off; nine of the ten `quality.py` answers equal the
+EXL3 pack's.
 
 ## Logs and stopping
 
