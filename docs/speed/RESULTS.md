@@ -1842,3 +1842,70 @@ fp8-roce-prefetch-acc.log): 45.6 / 66.0 at one stream, 91.3 at four, the same ha
 `TF_GLM_LOAD_PREFETCH=0` on an FP8 boot. The remaining floor is each rank reading 295 of the checkpoint's 306 GiB:
 a loader that reads only a rank's expert rows (about a quarter of the bytes) is the next load lever, engine work;
 a digest-cache miss costs 85-135 s on top for everyone.
+
+## The overnight push (2026-11-05, from 01:00 local): where a TP=4 round and a prompt chunk go, and 0109 pre-registered
+
+**Asked:** make decode and prefill faster, plan it with GLM (rtx:8888), run it unattended. GLM's plan is archived in
+docs/speed/glm-plan-20261105.md (brief: docs/speed/glm-brief-20261105.md).
+
+**Where an EXL3 decode round goes at TP=4 (TF_GLM_PROF=1, rank 0, 64 verify calls of 2 rows; acc.py under the
+profiler 55.0 / 83.5 tok/s, round 37.3 ms):** GPU 28.0 ms a verify call: routed experts 9.08, KDA 7.07, MLA 3.21,
+router 2.47, gather_a 2.30 + gather_b 2.13, head 0.74, dense 0.63, shared 0.38. About 9 ms of the round is outside
+the verify forward (the DFlash2 drafter's pass and exchange, the sampler, the host).
+
+**Where a 4,096-row prompt chunk goes (2.42 s a chunk, the engine's stage trace, rank 0, 63 chunks; stages nest, so
+they do not add up):** the main stream waits on the gathers 617 ms a chunk (25%); FFN 439 (experts 392, shared expert
+218, output projection 226); MLA 286; **HC glue 425** (212 at each site); mixer projections 192; KDA 133; router 34.
+The reading: with TF_GLM_PREFILL_REDUCE=gather every rank all-gathers every rank's full fp32 partials (3 x rows x
+hidden x 4 bytes received a rank an exchange) and glues all rows itself. ring (split along the ring) receives
+reduce-scatter partials plus bf16 glued rows, about 2.7x fewer bytes, and glues only its quarter of the rows. ring
+died on this fabric only because its sends and receives went over the world communicator, where NCCL picks the
+device (RESULTS 22:40 2026-11-04).
+
+**Candidate 0109 (engine) + recipe:** a two-rank NCCL communicator on each cable (TF_GLM_LINK_GRAPHS=<toward
+previous>,<toward next>; each made with its own graph file pinning its channels to the cable's devices, ids gathered
+over the world communicator, made even-rank-next-first so each link's two ranks meet, connected by one small
+exchange). cuda_relay's ring step sends to the next rank on link 1 (peer 1) and receives from the previous on link 0
+(peer 0); nothing else changes (gather mode, decode, the world communicator). The recipe writes
+nccl-graph-rank<r>-link-{prev,next}.xml next to each rank's ring graph and mounts them when PREFILL_REDUCE=ring. The
+same mechanism as the DeepSeek 4x recipe's TF_DS_LINK_GRAPHS, written for this engine's GLM family.
+
+**Gates (pre-registered before any 0109 serve):** same image, PREFILL_REDUCE=gather vs ring, bench2 from spark5.
+- **GO (default PREFILL_REDUCE=ring):** prefill 16K and 64K both >= +8% over gather; the start and every bench2 leg
+  (prefill pair, mixed1, 4 streams) without an NCCL error; quality.py NLL within 0.002 nats of gather (the split's
+  fp32 sums run in another order, so bit-exact prompt states are not expected; decode hashes may move for that reason
+  alone); 1-stream decode not more than 2% below gather.
+- **Candidate (opt-in only):** +3% to +8%, otherwise clean.
+- **KILL:** any NCCL error or hang at start or in a leg, NLL off by more than 0.002, or under +3%.
+
+**ROCE_RING=on on the EXL3 pack (image 5d37e5287d7b, no build; docs/speed/tp4/exl3-roce-tp4.log):** 1 stream
+57.1-57.4 / 86.7-86.9 tok/s (that day's EXL3 baseline 56.2 / 85.6; under the profiler 55.0 / 83.5), hashes
+b6ae240144bc / 9b68d8a77151; 4 streams 120.5-124.1 (115-120), 6 streams 142-144 (139-141), 8 streams 160-163
+(163-166); prefill 16K / 64K 1,764 / 1,892; quality NLL 0.7487241272787446, answers 11ceddde19d4, the same as without
+it. +2% at one stream, +3% at four, -1.5% at eight: under the 3% one-stream line, so ROCE_RING stays an opt-in on
+EXL3 as on FP8.
+
+**0109 built and served: KILLED by its gate (2026-11-05, ~08:00 local).** Three builds to get it on the wire:
+(1) `dupeZ` is gone from Zig 0.17 (`dupeSentinel`); (2) with NCCL_COMM_ID set every link's unique id named rank 0's
+bootstrap root, so a link's rank 0 on another Spark failed ncclCommInitRank ("unhandled system error"): fixed with
+TF_GLM_LINK_ADDR, the rank's own LAN address on NCCL_PORT+2, in NCCL_COMM_ID while the links are made; (3) NCCL's
+point-to-point send/recv ignores the graph file even on a two-rank link: spark4 took its port toward spark1 to reach
+spark3 (`ibv_modify_qp ... Connection timed out ... remote GID ::ffff:10.0.33.3`), so each ring hop became a two-rank
+ncclBroadcast rooted at the sender (same pairing order; a collective keeps to the graph file, which is how the
+DeepSeek 4x recipe's links work). Image 58f411527a0f then started cleanly with all four ranks' links up.
+
+| PREFILL_REDUCE (same code path otherwise) | gather (5d37e5287d7b, this night) | ring over the links (58f411527a0f) |
+| --- | --- | --- |
+| prefill 16K / 64K, tok/s | 1,646-1,764 / 1,672-1,892 | **1,204 / 1,344** |
+| prefill pair 30K alone / pair | 16.4-18.3 s / 33.5-36.6 s | 23.4 s / 46.8 s |
+| mixed1: 50K prompt TTFT, decoder during | 44.1 s, 17.7 tok/s | 67.6 s, 17.6 tok/s |
+| 1 stream prose / code | 56.2-57.4 / 85.6-86.9 | 56.2 / 85.0-85.1 (hashes the same) |
+| quality NLL / answers | 0.7487241272787446 / 11ceddde19d4 | the same (exact) |
+
+Prefill -25 to -30%: KILL (pre-registered: under +3%). The byte count was the wrong model: gather's all-gather
+streams the whole ring at once (NCCL pipelines 4 channels), while the split's ring runs three dependent steps an
+exchange, each a group of small broadcasts, twice a layer a piece. Fewer bytes, more serial latency. The ~25% of a
+chunk that waits on gathers is the exchange's cost as gather pays it; a cheaper exchange needs the gather's
+pipelining with fewer bytes (a reduce-scatter collective on the world ring, NCCL_ALGO=Ring, which a ring of four can
+carry), not point-to-point steps. The patch is kept in docs/speed/candidates/killed/ (it is correct and exact, only
+slow); the recipe's link-graph support was reverted, PREFILL_REDUCE=gather stays the only qualified TP=4 mode.

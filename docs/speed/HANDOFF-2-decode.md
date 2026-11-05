@@ -143,3 +143,10 @@ Session trail: RESULTS.md sections 2026-11-03 21:40Z onward; three Codex consult
 (docs/speed/codex-{decode-op-20261103,endgame,final}.md); 0102/0101 in patches/engine and candidates/;
 M1 harness docs/speed/m1/; B source refs docs/speed/s3-b-src/; scratch copies of everything in the rtx box's
 /tmp/tfwork (regenerate the harness from docs/speed/harness/ - /tmp dies on reboot).
+
+**2026-11-05 overnight (RESULTS "The overnight push"):** profiled TP=4 EXL3 (verify 28.0 ms of a 37.3 ms round;
+prompt chunks wait 25% on gathers, HC glue 17%); ROCE_RING=on measured on EXL3 (+2% / +3% / -1.5% at 1 / 4 / 8
+streams, exact: stays opt-in); candidate 0109 (per-cable link communicators for PREFILL_REDUCE=ring) built, made to
+work on the wire, and KILLED by its gate (prefill -25 to -30%). The serve is back on 5d37e5287d7b, EXL3, gather.
+Next prefill lever if anyone resumes: the exchange as an NCCL reduce-scatter on the world ring (pipelined like gather,
+a quarter of the bytes) with the glue reading one summed partial; gate on NLL (the sum order changes).
