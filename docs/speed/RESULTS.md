@@ -1909,3 +1909,63 @@ chunk that waits on gathers is the exchange's cost as gather pays it; a cheaper 
 pipelining with fewer bytes (a reduce-scatter collective on the world ring, NCCL_ALGO=Ring, which a ring of four can
 carry), not point-to-point steps. The patch is kept in docs/speed/candidates/killed/ (it is correct and exact, only
 slow); the recipe's link-graph support was reverted, PREFILL_REDUCE=gather stays the only qualified TP=4 mode.
+
+## The switch PRs' engine patches on the ring: 0109 drafter MLP split, 0110 CHUNK_SOLO (pre-registered 2026-11-05)
+
+From shanedertrain's PRs #5/#6 (Cameron Basham; written for four Sparks on a switch; the PRs themselves edit the TP=4
+launcher, which is not in the published repo). Applied unchanged on our 108 (theirs were numbered 0108 / 0109):
+- **0109** the DFlash2 drafter MLP split across every rank (FF / world, partials summed in rank order; their switch
+  measurement: drafter block 5.5 -> 3.5 ms a round, round 36.4 -> 33.0 with their RoCE gathers, hashes unchanged).
+  Always on.
+- **0110** TF_GLM_CHUNK_SOLO=4096 with TF_GLM_CHUNK=1024|2048: a prompt step beside a decoding stream takes that many
+  rows (their: worst decode pause beside a cold ~200K prefill 1.96 -> 0.65 s, that prefill +4.8%, exact). Off unless set.
+
+**Plan:** one image (108 + 0109 + 0110). EXL3 legs: E0 old image 5d37e5287d7b, E1 new image, E2 new image with
+CHUNK_SOLO=4096 / CHUNK=1024; then FP8 legs F0 / F1 / F2 the same. Each leg: acc.py x2, bench2, quality.py.
+
+**Gates:**
+- **0109 GO (always on in the image):** greedy hashes and quality NLL / answers identical to the old image's; 1-stream
+  prose or code >= +2% over the old image, no 4-stream loss beyond 2%. KILL: any hash or NLL change, or a loss.
+- **0110 GO as an opt-in (CHUNK_SOLO stays off by default either way):** bench2 mixed1 worst decode gap and p95 lower
+  than E1/F1's, prefill alone within 5%, hashes unchanged. Default-on only if the gap falls by half and prefill alone
+  stays within 2%.
+
+**Measured (image 137c54a8ea13 = 108 + 0109 + 0110 on all four Sparks; old image 5d37e5287d7b; spark5 harness;
+docs/speed/tp4/pr-*.log):**
+
+| | EXL3 old (E0) | EXL3 + 0109 (E1) | E1 + CHUNK_SOLO 1024 (E2) | FP8 old (F0) | FP8 + 0109 (F1) | F1 + CHUNK_SOLO (F2) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 stream prose / code | 56.5 / 85.8 | **60.3-60.6 / 90.9-91.0** | 60.2 / 90.8-91.3 | 45.0 / 65.4-65.6 | **47.3-47.4 / 67.4-67.6** | 47.1-47.3 / 67.6 |
+| decode round, prose | 36.3 ms | 33.9 | 34.1 | 48.0 | 46.0 | 46.1 |
+| 4 streams (acc) | 117.5-121.1 | 123.5-124.4 | 121.3-124.4 | 83.1-84.9 | 85.6-88.7 | 87.2-88.7 |
+| conc4 (bench2) | 117.1 | 128.9 | 122.7 | 82.6 | 92.4 | 88.3 |
+| prefill 16K / 64K | 1770 / 1896 | 1768 / 1893 | 1764 / 1893 | 1655 / 1761 | 1632 / 1766 | 1660 / 1765 |
+| mixed1: 50K TTFT; gap p95 / max | 44.1 s; 56 / 2616 ms | 44.1 s; 49 / 2628 | **49.8 s; 721 / 845** | 46.6 s; 79 / 2765 | 46.2 s; 76 / 2799 | **59.8 s; 865 / 969** |
+| hashes; NLL; answers | b6ae/9b68; 0.7487241272787446; 11ceddde19d4 | same | same | b363/d240; 0.74246848208233; 25789b7aa3d9 | same | same |
+
+**0109 (drafter MLP split): GO.** Exact on both packs; EXL3 +7% / +6% at one stream (round -2.4 ms), FP8 +5% / +3%
+(round -2.0 ms), four streams +2-12%, prefill unchanged. Promoted to patches/engine (always on in the image).
+**0110 (CHUNK_SOLO): fails its gate as an improvement**, kept in the image off by default (a no-op unless
+TF_GLM_CHUNK_SOLO=4096 is exported): the worst pause beside a 50K prompt falls 2.6-2.8 s -> 0.85-0.97 s, but pauses
+of 0.7-0.9 s become the 95th percentile (49-79 ms before) and the long prompt's TTFT grows +13% (EXL3) / +29% (FP8).
+For agents where one multi-second freeze is worse than many short ones it is an opt-in; not the default.
+
+**Measured (image 137c54a8ea13 = 108 + 0109 + 0110 on all four Sparks; old image 5d37e5287d7b; spark5 harness;
+docs/speed/tp4/pr-*.log):**
+
+| | EXL3 old (E0) | EXL3 + 0109 (E1) | E1 + CHUNK_SOLO 1024 (E2) | FP8 old (F0) | FP8 + 0109 (F1) | F1 + CHUNK_SOLO (F2) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 stream prose / code | 56.5 / 85.8 | **60.3-60.6 / 90.9-91.0** | 60.2 / 90.8-91.3 | 45.0 / 65.4-65.6 | **47.3-47.4 / 67.4-67.6** | 47.1-47.3 / 67.6 |
+| decode round, prose | 36.3 ms | 33.9 | 34.1 | 48.0 | 46.0 | 46.1 |
+| 4 streams (acc) | 117.5-121.1 | 123.5-124.4 | 121.3-124.4 | 83.1-84.9 | 85.6-88.7 | 87.2-88.7 |
+| conc4 (bench2) | 117.1 | 128.9 | 122.7 | 82.6 | 92.4 | 88.3 |
+| prefill 16K / 64K | 1770 / 1896 | 1768 / 1893 | 1764 / 1893 | 1655 / 1761 | 1632 / 1766 | 1660 / 1765 |
+| mixed1: 50K TTFT; gap p95 / max | 44.1 s; 56 / 2616 ms | 44.1 s; 49 / 2628 | **49.8 s; 721 / 845** | 46.6 s; 79 / 2765 | 46.2 s; 76 / 2799 | **59.8 s; 865 / 969** |
+| hashes; NLL; answers | b6ae/9b68; 0.7487241272787446; 11ceddde19d4 | same | same | b363/d240; 0.74246848208233; 25789b7aa3d9 | same | same |
+
+**0109 (drafter MLP split): GO.** Exact on both packs; EXL3 +7% / +6% at one stream (round -2.4 ms), FP8 +5% / +3%
+(round -2.0 ms), four streams +2-12%, prefill unchanged. Promoted to patches/engine (always on in the image).
+**0110 (CHUNK_SOLO): fails its gate as an improvement**, kept in the image off by default (a no-op unless
+TF_GLM_CHUNK_SOLO=4096 is exported): the worst pause beside a 50K prompt falls 2.6-2.8 s -> 0.85-0.97 s, but pauses
+of 0.7-0.9 s become the 95th percentile (49-79 ms before) and the long prompt's TTFT grows +13% (EXL3) / +29% (FP8).
+For agents where one multi-second freeze is worse than many short ones it is an opt-in; not the default.
