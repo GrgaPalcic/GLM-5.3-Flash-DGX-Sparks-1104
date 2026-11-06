@@ -32,7 +32,7 @@ URL="http://$API_HOST:$PORT"
 FIT_FILE="$STATE_DIR/context-fit.tsv"
 fit_key() {
   printf '%s|' "$PATCHES_HASH" "$MODEL_DIR" "$WORKER" "$TP" "$PARALLEL" "$KV" "$KV_PAGES" "$DENSE" "$HEAD" "$VISION" "$VISION_MAX_IMAGES" \
-    "$DRAFTER" "$DRAFTER_BITS" "$MEMORY_RESERVE_GIB" "$PROMPT_CACHE_GIB" "$HOST_CACHE_GIB" "$ROCE" "$CONTEXT_MAX" "$SERVE_EXTRA_ARGS" \
+    "$DRAFTER" "$DRAFTER_BITS" "$MEMORY_RESERVE_GIB" "$PROMPT_CACHE_GIB" "$CACHE_FIRST" "$HOST_CACHE_GIB" "$ROCE" "$CONTEXT_MAX" "$SERVE_EXTRA_ARGS" \
     | sha256sum | cut -c1-16
 }
 remembered_context() {
@@ -140,7 +140,7 @@ declare -a PASS_ENV=()
 WORKER_ENV_FILE=''
 MANAGED_ENV=' HOME HF_HUB_OFFLINE CUDA_DEVICE_ORDER CUDA_VISIBLE_DEVICES TENSORFOLD_NO_UPDATE_CHECK TENSORFOLD_NO_LIVE
  TENSORFOLD_MEMORY_RESERVE_GIB TF_GLM_DENSE_BITS TF_GLM_HEAD_BITS TF_GLM_CLEAR_THINKING TF_GLM_RANK TF_GLM_WORLD TF_CUDA_DEVICE
- TF_KV_PAGES TF_GLM_CE_EXCHANGE TF_GLM_ABSORB_MMA TF_GLM_W8A8 TF_GLM_HOST_CACHE_GIB TENSORFOLD_PREFILL_SHARE TENSORFOLD_PREFILL_BUDGET
+ TF_KV_PAGES TF_GLM_CE_EXCHANGE TF_GLM_ABSORB_MMA TF_GLM_W8A8 TF_GLM_HOST_CACHE_GIB TENSORFOLD_PREFILL_SHARE TENSORFOLD_PREFILL_BUDGET TF_PROMPT_CACHE_FIRST
  TF_ROCE TF_ROCE_MAX_KB TF_ROCE_HCA TF_BIN TF_REPO TF_REF
  NCCL_COMM_ID NCCL_SOCKET_IFNAME NCCL_IB_HCA NCCL_IB_GID_INDEX NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS '
 # The flags both ranks share. Everything that places a rank is added per rank, so the two fingerprints agree on the rest.
@@ -155,6 +155,8 @@ build_env_args() {
     -e "TF_BIN=$TF_BIN" -e "TENSORFOLD_PREFILL_SHARE=$PREFILL_SHARE")
   [[ -z "$HOST_CACHE_GIB" ]] || ENV_ARGS+=(-e "TF_GLM_HOST_CACHE_GIB=$HOST_CACHE_GIB")
   [[ -z "$PREFILL_BUDGET" ]] || ENV_ARGS+=(-e "TENSORFOLD_PREFILL_BUDGET=$PREFILL_BUDGET")
+  # CACHE_FIRST=1: engine patch 0112 sets PROMPT_CACHE_GIB aside before the streams' windows (both ranks alike)
+  [[ "$CACHE_FIRST" != 1 ]] || ENV_ARGS+=(-e "TF_PROMPT_CACHE_FIRST=1")
   # Variables you exported yourself. Rank 0 takes them by name, so no value is printed or put on a command line.
   # Rank 1 cannot: `docker run -e KEY` on the worker would read the worker's environment, where they are not set, and
   # the two ranks would then serve with different settings. Their values go to the worker in an env file instead
@@ -237,6 +239,9 @@ start_memguard() {
     log "./stop.sh when one stays under ${MEMGUARD_FLOOR_GIB} GiB for ${MEMGUARD_HOLD_S} s."
     return 0
   fi
+  # The guard outlives start.sh, so it takes nothing of start.sh's: not the lock (fd 8), and not the caller's
+  # stdin, stdout or stderr. Holding them kept `ssh spark './start.sh'` from returning after LIVE (issue 7); its one
+  # message goes to memguard.log in the run directory.
   ( exec 8>&-                     # never hold start.sh's lock
     under_here=0; under_there=0; tick=0; there=''
     # The worker's figure is taken about every 10 s (it costs an ssh round trip); this Spark's at every tick.
@@ -256,14 +261,14 @@ start_memguard() {
       if (( under_here >= MEMGUARD_HOLD_S )) || (( under_there >= MEMGUARD_HOLD_S )); then
         who=$(hostname); low=$here
         (( under_there < MEMGUARD_HOLD_S )) || { who=$(worker_host); low=$there; }
-        printf '[memguard] %s: %s GiB available, under the %s GiB floor for %s s; stopping the server\n' \
-          "$who" "$low" "$MEMGUARD_FLOOR_GIB" "$MEMGUARD_HOLD_S" | tee -a "$RUN_LOG_DIR/memguard.log" >&2
-        MEMGUARD=0 "$REPO_ROOT/stop.sh" >> "$RUN_LOG_DIR/memguard.log" 2>&1 || true
+        printf '%s [memguard] %s: %s GiB available, under the %s GiB floor for %s s; stopping the server\n' \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$who" "$low" "$MEMGUARD_FLOOR_GIB" "$MEMGUARD_HOLD_S"
+        MEMGUARD=0 "$REPO_ROOT/stop.sh" 2>&1 || true
         exit 0
       fi
-    done ) &
+    done ) </dev/null >> "$RUN_LOG_DIR/memguard.log" 2>&1 &
   MEMGUARD_PID=$!
-  log "[I_MEMGUARD] Watching both Sparks: a stop below ${MEMGUARD_FLOOR_GIB} GiB held ${MEMGUARD_HOLD_S} s (pid $MEMGUARD_PID; MEMGUARD=0 turns it off)."
+  log "[I_MEMGUARD] Watching both Sparks: a stop below ${MEMGUARD_FLOOR_GIB} GiB held ${MEMGUARD_HOLD_S} s (pid $MEMGUARD_PID, its log $RUN_LOG_DIR/memguard.log; MEMGUARD=0 turns it off)."
 }
 stop_memguard() { [[ -z "${MEMGUARD_PID:-}" ]] || { kill "$MEMGUARD_PID" 2>/dev/null || true; wait "$MEMGUARD_PID" 2>/dev/null || true; }; }
 
@@ -280,10 +285,20 @@ api_curl() {
 # Rank 1 on the worker first: it retries its line to rank 0 for up to 300 s. Then rank 0 here, which serves the API.
 launch() {
   local ctx=$1
-  local -a user_args=() mounts=() cmd=() wcmd=()
+  local -a user_args=() worker_user_args=() mounts=() cmd=() wcmd=()
+  local worker_ug='' unwritable
   build_serve_args "$ctx"
   build_env_args
   [[ -z "$CONTAINER_USER" ]] || user_args=(--user "$CONTAINER_USER")
+  worker_user_args=("${user_args[@]}")
+  # The worker's own login when CONTAINER_USER is this Spark's (the default, or set to the same value): the two logins
+  # can have different ids, and rank 1 writes to a state folder its own login owns. Root or another
+  # UID:GID crosses as given.
+  if [[ "$CONTAINER_USER" == "$(id -u):$(id -g)" ]]; then
+    worker_ug=$(wssh sh -c 'printf "%s:%s\n" "$(id -u)" "$(id -g)"') && [[ "$worker_ug" =~ ^[0-9]+:[0-9]+$ ]] \
+      || fail E_WORKER "Could not read the login's ids on $(worker_host)."
+    worker_user_args=(--user "$worker_ug")
+  fi
   RUN_LOG_DIR="$LOG_DIR/run-$(date -u +%Y%m%dT%H%M%SZ)-$$-$ATTEMPT"
   log "Ranks:"
   show_ranks
@@ -291,7 +306,12 @@ launch() {
     mkdir -p "$RUN_LOG_DIR" "$CACHE_DIR/home"
     ln -sfn -- "$RUN_LOG_DIR" "$LOG_DIR/current"
     wssh mkdir -p "$WORKER_CACHE_DIR/home" "$WORKER_STATE_DIR" \
-      || fail E_START "Could not create $WORKER_CACHE_DIR on $(worker_host)."
+      || fail E_START "Could not create $WORKER_CACHE_DIR on $(worker_host). It defaults to this Spark's home; when the logins differ, set WORKER_CACHE_DIR to a path under $(worker_host)'s own home in local.sh."
+    # With different ids, a folder an earlier rank made in its HOME under this Spark's ids stops rank 1 with only AccessDenied.
+    if [[ -n "$worker_ug" && "$worker_ug" != "$CONTAINER_USER" ]]; then
+      unwritable=$(wssh find "$WORKER_CACHE_DIR/home" -type d ! -writable -print -quit 2>/dev/null) || true
+      [[ -z "$unwritable" ]] || fail E_WORKER "$unwritable on $(worker_host) is not writable by the login rank 1 runs as ($worker_ug). Give $WORKER_CACHE_DIR/home to that login: sudo chown -R $worker_ug $WORKER_CACHE_DIR/home"
+    fi
     [[ -z "$TEMPLATE_FILE" ]] || wssh tee "$WORKER_TEMPLATE" < "$TEMPLATE_FILE" >/dev/null \
       || fail E_START "Could not place the chat template on $(worker_host)."
   fi
@@ -308,7 +328,7 @@ launch() {
   done
   [[ -z "$WORKER_ENV_FILE" ]] || worker_env+=(--env-file "$WORKER_ENV_FILE")
   wcmd=(docker run -d --name "$CONTAINER_NAME" --label tf.recipe=glm53-spark --label "tf.patches=$PATCHES_HASH"
-    --init --restart=no "${RUN_ARGS[@]}" "${user_args[@]}" "${worker_env[@]}" "${RANK_ENV[@]}"
+    --init --restart=no "${RUN_ARGS[@]}" "${worker_user_args[@]}" "${worker_env[@]}" "${RANK_ENV[@]}"
     "${WORKER_MOUNTS[@]}" -v "$WORKER_CACHE_DIR:/state")
   [[ -z "$TEMPLATE_FILE" ]] || wcmd+=(-v "$WORKER_TEMPLATE:/templates/chat_template.jinja:ro")
   wcmd+=(--entrypoint "$TF_BIN" "$IMAGE" serve /model "${SERVE_ARGS[@]}")

@@ -1,5 +1,63 @@
 # Changelog
 
+- **2026-11-06** -- engine patch 0112 (main's 0108): `CACHE_FIRST=1` (`TF_PROMPT_CACHE_FIRST`), opt-in. The pool counted the room in
+  whole windows before the prompt cache, so `PROMPT_CACHE_GIB` only capped the remainder (issue 7: crystal8194,
+  tanchunsiong, unitea1992; issue 3). With it, the cache is set aside first and the streams share the pages left, one
+  window at least. On the pair at `PARALLEL=8` and the 1M window with `PROMPT_CACHE_GIB=12`: a 9.3-9.7 GiB cache; a
+  380k-token conversation resumes 99% cached after eight ~31k ones (3.0 s instead of 234 s) and all eight resume;
+  hashes and decode unchanged; three concurrent agent loops as fast. Off, the plan is as before. The startup log says
+  when the room funds less cache than `--prompt-cache-gib` asks, and names what frees more (tanchunsiong's
+  suggestion). README: the long-session setting is now `CACHE_FIRST=1 PROMPT_CACHE_GIB=12` at eight streams.
+  `WITH_VIDEO=1`, opt-in: `docker/Dockerfile` builds `libtfvideo.so` over upstream's static FFmpeg 9.0.2 into its own
+  image tag (the default image and its tag are unchanged), so `VISION=1` serves `video_url` parts (issue 8, chai-md;
+  checked: a three-colour clip described in order, text hashes unchanged). Issue 9 (pepelaskov): the dropped digit
+  reproduces on the Ablit weights only; the published weights copy the id exactly on the same image and request, and
+  so do the Ablit weights with thinking on (README "Ablit weights").
+- **2026-11-06** -- README: a measured setting for long agent sessions, `PARALLEL=2 CONTEXT=524288
+  PROMPT_CACHE_GIB=32`. On the pair, a 382k-token conversation, then eight unique ~31k ones, then the long one's next
+  turn: with this setting rank 0 funds a 12.4 GiB cache, the long turn resumes 100% cached (0.8 s instead of 237 s)
+  and all eight short ones resume at 94%, with decode and greedy hashes unchanged. The served `PARALLEL=8` (3.4 GiB)
+  resumes 1 of 8 and not the long one; `PARALLEL=4 PROMPT_CACHE_GIB=16`, with or without `CONTEXT=524288`
+  (5.1-5.4 GiB), resumes 3-4 of 8 and not the long one. The trade is two streams at once; there is still no disk or
+  host tier on GB10. Measured alongside, with no change taken: tool-eval-bench 2.8.0 `--hardmode`, 3 seeds, scores 88
+  thinking off and 93 thinking on (reasoning high). A build with 2,048-row prompt chunks (without 0094/0095) has the
+  same hashes and a shorter worst pause beside a long prefill (1.6 s against 2.7 s), but p95 pauses 10 times longer
+  and three concurrent agent loops 3.6 times slower, so 4,096 rows stay.
+- **2026-11-05** -- engine patch 0111 (main's 0107): `TF_TOOL_CALL_GUARD=1`, opt-in. A Hermes agent showed raw
+  `<tool_call>session_search<arg_key>…` text: its turn after two tool rounds was sent without `session_search`, and
+  the server (as vLLM) keeps a call to a tool the request does not offer as text. With the guard, such a request gets a
+  closing system note that tools are unavailable and the markup hidden (no tools, or `tool_choice: "none"`), or only
+  the unoffered call hidden (other tools offered); streamed or whole. Measured on a live serve with the patch: off,
+  every case replies as before and the greedy hashes are unchanged; on, no markup in 12 of 12 such replies (prose or
+  empty), calls to offered tools still parse (4 of 4), hashes and speed unchanged. README: the patch row and a
+  troubleshooting row.
+- **2026-11-05** -- the memory guard `start.sh` leaves running holds none of the caller's stdin, stdout or stderr: it
+  kept the pipe of `ssh spark './start.sh'` open, so that ssh session never returned after LIVE (issue 7, crystal8194).
+  Its one message now goes to `memguard.log` in the run directory (it went to the terminal and the log). A test,
+  `scripts/tests/memguard-detached.sh`, reads the guard's descriptors from /proc; `scripts/tests/run.sh` runs the
+  syntax check, shellcheck when installed, and the tests.
+- **2026-11-05** -- README: the prompt cache is funded from the remainder after the page pool and the streams' fixed
+  parts, so `PROMPT_CACHE_GIB` only caps it (eight streams at 1M leave under 1 GiB; `PARALLEL=4` funds 8 GiB), the
+  room differs by a few GiB between Sparks so the reserve that holds two windows is a per-pair check, hits land on the
+  4,096-row chunk grid, and nothing survives a restart at this pin (issue 3: jds1-ai, micachi; issue 7: crystal8194).
+  Video input: the template accepts `video_url` parts but the image ships no `libtfvideo.so`, so they return HTTP 500;
+  the settings table, the "What is checked" line and a troubleshooting row say so, with the out-of-image build that
+  works (issue 8, chai-md). Building the video runtime into the image is a Dockerfile change with an FFmpeg stage,
+  not taken here.
+- **2026-11-04** -- `WORKER_WEIGHTS=check` accepts a local checkpoint with no `.revision` marker when its config.json
+  and shards are there, as `worker_weights_ready`'s comment always said; `MODEL_REVISION`'s default made the marker
+  mandatory even for `MODEL_SOURCE=local` (issue 3, failure 1). The `E_WEIGHTS` hint names the marker.
+- **2026-11-04** -- the worker's state paths (`WORKER_CACHE_DIR` and the state and overlay built on it) default under
+  the worker's own home when its login differs from this Spark's and every default is untouched; an explicitly set
+  path wins as before (issue 3, failure 2). The `E_START` failure to create the directory says what to set.
+- **2026-11-04** -- `start.sh` runs rank 1 as the worker's own login when `CONTAINER_USER` is this Spark's (the default).
+  With different ids on the two Sparks (uid 1000 and 1001 on ours), rank 1 could not write
+  to its state folder and stopped at `hashing the checkpoint failed at model-00001-of-00083.safetensors` with
+  `AccessDenied`. Equal ids, root and another `CONTAINER_USER` run as before; a `CONTAINER_USER` set to this Spark's own ids
+  counts as the default. With different ids the start stops, with the fix, when a folder in rank 1's `HOME`
+  (`WORKER_CACHE_DIR/home`) is not writable by that login, which a workaround that let an earlier rank write there can leave
+  behind. A worker reading shards only the head's id can read (mode 0600 over NFS without `all_squash`) now needs shards its
+  login can read.
 - **2026-11-04** -- `0108` (candidate, off by default): the four-rank RoCE ring all-gather. `ROCE_RING=on ./start-tp4.sh`
   carries the decode and verify all-gathers up to `ROCE_MAX_KB` as one-shot RDMA writes to both neighbours, each
   relaying half a shard to the rank across (`TF_ROCE_RING=1`, `TF_ROCE_HCA=<toward previous>,<toward next>` per
@@ -34,17 +92,6 @@
   recipe's four serving scripts do pass through Aevonix's rework (the 2x RTX PRO 6000 recipe adopted it - their texts are the
   closest matches to ours), so Aevonix stays credited for the intermediate rework and the K12 loop, as the reworker of the
   lab's scripts rather than their origin.
-- **2026-11-04** -- `./start-tp4.sh` and `./stop-tp4.sh`: the recipe over four DGX Sparks cabled as a ring without a
-  switch (README "4 Sparks"). The ring is found from the Sparks' ConnectX-7 addresses; NCCL runs ring-only with a graph
-  file per rank and subnet-aware routing, connected at first use (the engine's connect-everything-at-init would join
-  rank 0 to the Spark across the ring, where the first boot timed out); the engine's prefill exchanges run as all-gathers
-  between neighbours; the workers read the head's checkpoint over NFS. Engine patch `0106`: the start's peer warm-up
-  follows `TF_GLM_PREFILL_REDUCE` (split: every peer; ring: next and previous; gather: none) instead of sending to every
-  rank. NCCL connects at first use (`NCCL_RUNTIME_CONNECT=1`) and bootstraps on the head's LAN address, so neither
-  NCCL's tree nor the engine's follower start-up reaches the Spark across the ring. Measured on this kit (greedy, the
-  recipe's harness): 56 / 85 tok/s prose / code at one stream against the pair's 38 / 57, 115-120 at four streams
-  against 79-81, 163-166 at eight against 105-106, prefill 1,750-1,890 tok/s, eight 1M windows and a 3.6 GiB prompt
-  cache a rank. The two-Spark `./start.sh` is unchanged. Details: docs/speed/RESULTS.md, "TP=4 on the four-Spark ring".
 - **2026-11-04** -- Upstream TensorFold since this recipe's pin (`f350cd3e`, 1,059 commits behind main) was reviewed for
   fixes worth carrying (docs/speed/RESULTS.md, "Upstream since the pin"). The one that applied cleanly, the lane fix
   `ed39acc5a` (a stream finishing on its first token released its lane only after its trace), was built as `0106` and
