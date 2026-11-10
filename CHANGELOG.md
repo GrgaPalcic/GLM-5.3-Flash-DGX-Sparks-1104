@@ -1,5 +1,14 @@
 # Changelog
 
+- **2026-11-10** -- engine patches 0122-0124: LEARN_GIB beside TF_KV_SHARE, unsharded and with KV_SHARD.
+  The disk tier (`LEARN_GIB`, 0109) works under the shared pages: states are written from the pool's pages in pieces
+  under the staging permit and recalled into pool pages, per rank when sharded. Measured on two DGX Sparks
+  (2026-11-10, sharded, `LEARN_GIB=200`): a 126,402-token conversation after a restart answers with `cached 122880`
+  in 3.72 s to first token (1137 MiB read in 0.8 s), a 610,123-token one with `cached 606208` in 7.05 s (4080 MiB in
+  3.1 s), and the same 600k conversation evicted by two others returns in 7.15 s; each with the cold reply's sha256.
+  Notes: each kept turn writes its own file of about 389 MiB beside the shared row blocks, so many turns spend
+  `--learn-daily-gib` (32 by default) by count; the store identity hashes the kernels, so a new build starts an empty
+  store; 0117's `TF_GLM_KV_LIVE_HALF=1` is not supported beside this yet.
 - **2026-11-10** -- engine patches 0113-0121: TF_KV_SHARE, kept prompt states as the pool's own pages (no second copy), beside KV_SHARD.
   Kept prompt states no longer hold a second copy of their rows: under `TF_KV_SHARE=n` they are the pool's pages by
   reference (ports of upstream's share work onto f350cd3e + 0001-0112, plus what the sharded pool needed). Measured on

@@ -19,7 +19,7 @@
 
 **Engine: TensorFold 1.1.9** (`tensorfold-native --version`), upstream commit
 [`f350cd3e`](https://github.com/ashhart/TensorFold/commit/f350cd3ea253a042e205746928271f9d8f71a82d) plus this recipe's
-121 engine patches (`patches/engine/`).
+124 engine patches (`patches/engine/`).
 
 This recipe serves GLM-5.3-Flash from an EXL3 checkpoint on **two NVIDIA DGX Sparks** (GB10, 128 GB unified memory
 each) at tensor parallel 2, one rank on each Spark, over their ConnectX-7 link. It uses TensorFold's native Zig/CUDA
@@ -49,7 +49,7 @@ The engine is TensorFold 1.1.9 at commit `f350cd3e` ([ashhart/TensorFold](https:
 
 ## What is checked
 
-121 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
+124 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
 reaches the worker by content; link discovery finds both PCIe twins of the cabled port and the RoCE v2 GID that
 holds each port's own IPv4; NCCL and the engine's RDMA all-gather run over the cable; the full 1,048,576-token window
 serves 8 streams beside a 3.6 GiB prompt cache; greedy replies are byte-stable across every change
@@ -305,9 +305,9 @@ and MMLU 88.4%, thinking-on categories unchanged.
 
 ## Engine patches
 
-`patches/engine/` holds 121 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
+`patches/engine/` holds 124 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
 the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-6000-TensorFold)'s, unchanged;
-0094-0121 are this pair's own or ported from that recipe or from upstream. None is GB10-specific: the arch-gated kernels test
+0094-0124 are this pair's own or ported from that recipe or from upstream. None is GB10-specific: the arch-gated kernels test
 `__CUDA_ARCH__ >= 1200`, which `sm_121` satisfies.
 
 | Patches | What they do |
@@ -339,6 +339,9 @@ the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-
 | 0119 | **Ported (upstream 389769733).** The startup plan counts `TF_KV_SHARE`'s kept states, a slot each (about 252 MiB sharded) beside the pool's pages, under `CACHE_FIRST=1`. |
 | 0120 | `TF_KV_SHARE` beside `KV_SHARD=1`: the store takes the pool's parts as its pages, reclaim runs per part, a resume opens in its adopted pages' part, a kept state's slot leaves the latent rows on the pages. |
 | 0121 | A sharded share resume takes no twin (about 75 % of the twinned prefill rate), so a kept prefix is adopted only when it pays: `TF_GLM_KV_SHARE_UNTWINNED_PCT` (75), counter `kv_shard_resumes_skipped_total`. |
+| 0122 | `LEARN_GIB` beside `TF_KV_SHARE`, unsharded: a pages layout in the disk image, write-behind in pieces under the permit, recall into pool pages. |
+| 0123 | A sharded kept state's pages stay in one part (`kv_shard_keeps_refused_total`); the shared store's disk glue (a `share` step for the identity probe, the store's family carries the disk image, idle turns drive the writer, a save carries the whole path's pages). |
+| 0124 | `LEARN_GIB` beside `TF_KV_SHARE` and `KV_SHARD=1`: the sharded writer, recall into one part, per-rank disk ops. A 606,208-token state resumes after a restart or an eviction in about 7 s to first token with the cold reply's sha256. |
 
 Every default-on patch was A/B tested against the image before it: greedy replies identical plus a measured gain.
 
