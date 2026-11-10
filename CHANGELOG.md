@@ -1,5 +1,15 @@
 # Changelog
 
+- **2026-11-10** -- engine patches 0113-0121: TF_KV_SHARE, kept prompt states as the pool's own pages (no second copy), beside KV_SHARD.
+  Kept prompt states no longer hold a second copy of their rows: under `TF_KV_SHARE=n` they are the pool's pages by
+  reference (ports of upstream's share work onto f350cd3e + 0001-0112, plus what the sharded pool needed). Measured on
+  two DGX Sparks at `PARALLEL=8 CONTEXT=1048576 KV=fp8 KV_SHARD=1 CACHE_FIRST=1 PROMPT_CACHE_GIB=7 TF_KV_SHARE=32
+  MEMORY_RESERVE_GIB=5` (2026-11-10): 9,112-9,264 pool pages (6,156 before at reserve 9.5), 27 kept states each up to
+  the full window in 6.8 GiB of slots; cold/warm time to first token 4.30/1.46 s at 4,111 tokens, 74.7/4.89 s at
+  126,408, 402.6/7.04 s at 610,129 (3.8 s once its save has finished); resumed = fresh and concurrent = alone at 1, 2,
+  4 and 8, drafted and plain; MemAvailable low-water 4.8 / 6.7 GiB. A resumed pass under the share takes no twin
+  (about 75 % of the twinned prefill rate); 0121 adopts a kept prefix only when that pays. All off by default: with
+  `TF_KV_SHARE` unset the engine's paths are unchanged. 0118 only repairs host tests that failed at 0001-0112.
 - **2026-11-09** -- engine patch 0112: rejected tool calls are logged one by one, and `TF_TOOL_CALL_GUARD=1` no longer
   empties replies. A Hermes Agent report (2026-11-06, guard on) showed 25 replies of 436 with calls hidden on requests
   that offered tools, 11 of them left empty, and Hermes retrying each empty reply unchanged until its 39 s timeout;

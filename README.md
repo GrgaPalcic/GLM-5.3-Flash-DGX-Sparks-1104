@@ -19,7 +19,7 @@
 
 **Engine: TensorFold 1.1.9** (`tensorfold-native --version`), upstream commit
 [`f350cd3e`](https://github.com/ashhart/TensorFold/commit/f350cd3ea253a042e205746928271f9d8f71a82d) plus this recipe's
-112 engine patches (`patches/engine/`).
+121 engine patches (`patches/engine/`).
 
 This recipe serves GLM-5.3-Flash from an EXL3 checkpoint on **two NVIDIA DGX Sparks** (GB10, 128 GB unified memory
 each) at tensor parallel 2, one rank on each Spark, over their ConnectX-7 link. It uses TensorFold's native Zig/CUDA
@@ -49,7 +49,7 @@ The engine is TensorFold 1.1.9 at commit `f350cd3e` ([ashhart/TensorFold](https:
 
 ## What is checked
 
-112 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
+121 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
 reaches the worker by content; link discovery finds both PCIe twins of the cabled port and the RoCE v2 GID that
 holds each port's own IPv4; NCCL and the engine's RDMA all-gather run over the cable; the full 1,048,576-token window
 serves 8 streams beside a 3.6 GiB prompt cache; greedy replies are byte-stable across every change
@@ -305,9 +305,9 @@ and MMLU 88.4%, thinking-on categories unchanged.
 
 ## Engine patches
 
-`patches/engine/` holds 112 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
+`patches/engine/` holds 121 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
 the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-6000-TensorFold)'s, unchanged;
-0094-0112 are this pair's own or ported from that recipe or from upstream. None is GB10-specific: the arch-gated kernels test
+0094-0121 are this pair's own or ported from that recipe or from upstream. None is GB10-specific: the arch-gated kernels test
 `__CUDA_ARCH__ >= 1200`, which `sm_121` satisfies.
 
 | Patches | What they do |
@@ -330,6 +330,15 @@ the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-
 | 0110 | KV sharding (`KV_SHARD=1`, `TF_GLM_KV_SHARD`, off by default) at TP=2, toward upstream [#1431](https://github.com/ashhart/TensorFold/issues/1431): each stream's FP8 latent rows on its owner rank, a second page table pointing off-owner at a discard page, owner-computed decode and verify (no new kernel), prompts on a borrowed twin, kept states carried to another owner in 32 MiB pieces, and 0109's disk image under it. Refused by name with the MTP drafter, `--parallel 1`, other KV caches, or a part under 131k tokens. `tf-cuda-test glm-kv-shard-check` checks it against an unsharded twin byte for byte. Off: replies byte-identical |
 | 0111 | **This pair's.** The clean image build prints no compiler warning: two fp8 expert kernels' unread kernel-local `RW`, `prefill_attention`'s readerless `SMEM_MAX`, `glm_mm`'s `Tile` `SMEM` member no instantiation uses, and `flashnext_fact` / `flashnext_attn` unroll loops that sat behind an `if constexpr` they could not reach (now behind the inverted guard, so each instantiation compiles only its reachable side). No arithmetic, launch shape or output changes: all six files' fatbins compile byte-identical |
 | 0112 | **This pair's.** Each tool envelope the parser rejects is logged on its own line: request id, reason (`unknown_tool_name`, `malformed`, `unclosed`), tool name, thinking and effort, and whether it was kept or hidden; `TF_TOOL_CALL_DEBUG=1` adds the envelope text. With `TF_TOOL_CALL_GUARD=1` and tools offered, only well-formed calls to unoffered tools are hidden; malformed calls stay as text, and a reply is never emptied by the guard. Host tests: rejection reasons, the guard's hiding whole and streamed. Guard off: replies byte-identical |
+| 0113 | **Ported (upstream a2d27dac7, a3a53dbe3).** `prompt_radix` plans its marks on the prompt grid and looks ahead for a longer kept prefix; groundwork for 0114-0121. |
+| 0114 | **Ported (upstream 40c03bf13).** `TF_KV_SHARE=n` (off by default): kept prompt states are the pool's own pages, held by reference in one radix store; `n` is the number of kept states. |
+| 0115 | **Ported (upstream 0e5085dca, 12dfa588a).** The disk tier's host staging is bounded by a permit (`TF_GLM_LEARN_STAGING_GIB`, 1 GiB by default): a long state is saved in pieces. |
+| 0116 | **Ported (upstream a6f5615d4, 768170532, d5b0b92f4).** GLM under `TF_KV_SHARE`: a kept state leaves the shared pages out of its copy, lanes adopt the store's pages at the head of a lease; unsupported combinations are refused by name. |
+| 0117 | **Ported (upstream 7547c99c2, PR #2181).** `TF_GLM_KV_LIVE_HALF=1` (off by default): a kept state carries the live KDA half alone. Not beside `LEARN_GIB` under `TF_KV_SHARE` yet (startup ends with `SnapshotSize`). |
+| 0118 | Host tests follow 0094's 4,096-row chunk grid, 0014's `e.drafts` and 0095's drafter width: `test-glm-snapshots-host`, `test-glm-prompts-host` and `test-cuda-host` are green again (they failed at 0001-0112). |
+| 0119 | **Ported (upstream 389769733).** The startup plan counts `TF_KV_SHARE`'s kept states, a slot each (about 252 MiB sharded) beside the pool's pages, under `CACHE_FIRST=1`. |
+| 0120 | `TF_KV_SHARE` beside `KV_SHARD=1`: the store takes the pool's parts as its pages, reclaim runs per part, a resume opens in its adopted pages' part, a kept state's slot leaves the latent rows on the pages. |
+| 0121 | A sharded share resume takes no twin (about 75 % of the twinned prefill rate), so a kept prefix is adopted only when it pays: `TF_GLM_KV_SHARE_UNTWINNED_PCT` (75), counter `kv_shard_resumes_skipped_total`. |
 
 Every default-on patch was A/B tested against the image before it: greedy replies identical plus a measured gain.
 
