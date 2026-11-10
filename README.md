@@ -173,6 +173,42 @@ Layered: `scripts/config.sh` defaults, then `.env`, then `scripts/local.sh` (tru
 variables. **The served pair's `local.sh`** sets `PORT=8888`, `PARALLEL=8`, `CONTEXT=auto`, `KV=fp8`, `DENSE=q8`,
 `HEAD=q8`, `ABSORB_MMA=1`, `HOST_CACHE_GIB=0`, `MEMORY_RESERVE_GIB=9.5`, `MODEL_SOURCE=local`, `WORKER_WEIGHTS=check`.
 
+### Recommended settings on this branch (shared KV pages and the SSD tier, two Sparks)
+
+This branch (`kv-share-ssd`) carries engine patches 0113-0127 on top of the recipe. They are all off by default; the
+settings that turn them on, as served on a pair of DGX Sparks since 2026-11-10, are in
+[`scripts/local.sh.kv-share.example`](scripts/local.sh.kv-share.example):
+
+```bash
+cp scripts/local.sh.kv-share.example scripts/local.sh    # set WORKER, HOST and, if the weights are already there, the paths
+./start.sh
+```
+
+| Setting | Value | What it buys |
+| --- | --- | --- |
+| `export TF_KV_SHARE=32` | on | Kept sessions are the pool's own pages by reference: no second copy of their rows |
+| `KV_SHARD=1`, `CACHE_FIRST=1`, `PROMPT_CACHE_GIB=7` | | The sharded pool, and 27 kept sessions' slots (6.8 GiB) set aside first; `9` holds all 32 |
+| `MEMORY_RESERVE_GIB=5` | was 9.5 | About 9,150 pool pages (4.69M tokens) where 9.5 gave 6,156 (3.15M) |
+| `LEARN_GIB=200` | | Kept sessions also on NVMe: a session evicted from memory, or a restarted lane, resumes from disk |
+| `SERVE_EXTRA_ARGS='--top-k 20 --learn-daily-gib 200'` | | The engine's 32 GiB daily write budget runs out in a night; each kept turn writes about 389 MiB |
+
+Measured with these settings (two Sparks, `PARALLEL=8 CONTEXT=1048576 KV=fp8`): a 610k-token session's next turn in
+3.8 s while kept, 7.2 s after eviction and 7.1 s after a lane restart (from disk, the cold reply's sha256 each time);
+cold/warm at 126k tokens 74.7 / 4.3 s; replies equal at concurrency 1 to 8, drafted and plain.
+
+After the first start, check before trusting those numbers on your pair:
+
+```bash
+docker logs glm53-spark 2>&1 | grep -E "pages of 512|conversation states on disk"   # pages, the reserve, "27 of TF_KV_SHARE=32 kept states' slots"
+awk '/MemAvailable/{printf "%.1f GiB\n", $2/1048576}' /proc/meminfo                  # on both Sparks, under load: stay above 3 GiB
+python3 <TensorFold checkout>/tools/share_gate.py http://127.0.0.1:8888 --model GLM-5.3-Flash --sizes 4096,126976 --levels 1,8
+```
+
+Know before you rely on it: every engine rebuild opens a new, empty disk store (its directory is named by a hash that
+includes the compiled kernels) and leaves the old one under `CACHE_DIR/learn` for you to delete; a resumed turn
+prefills its new tokens at about 75 % of the cold rate, so a kept prefix is used only when the new part is at most
+three times its length; `TF_GLM_KV_LIVE_HALF=1` must not be set beside `LEARN_GIB`.
+
 ### The pair
 
 | Setting | Default | Meaning |
