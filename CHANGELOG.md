@@ -1,5 +1,11 @@
 # Changelog
 
+- **2026-11-10** -- engine patches 0125-0126: a failed disk recall under TF_KV_SHARE costs a cold prefill, not the lane; a fault drill.
+  Before, a disk op failing on rank 1 inside a recall ended both ranks (`rank 1 stopped (SnapshotSize); this rank stops
+  too`). Now the recall is given up cleanly and the request prefills cold. Drill on two DGX Sparks (2026-11-10,
+  `TF_GLM_DISK_FAULT=40`): rank 1 logged `a disk step for state 2 failed (DiskFaultDrill)` and stayed up, rank 0 logged
+  `recalling 57344 tokens from disk failed (DiskRankFailed); the pass prefills from the start`, and the next recall
+  returned a 126k conversation with its reference sha256.
 - **2026-11-10** -- engine patches 0122-0124: LEARN_GIB beside TF_KV_SHARE, unsharded and with KV_SHARD.
   The disk tier (`LEARN_GIB`, 0109) works under the shared pages: states are written from the pool's pages in pieces
   under the staging permit and recalled into pool pages, per rank when sharded. Measured on two DGX Sparks
