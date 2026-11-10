@@ -1,5 +1,8 @@
 # Changelog
 
+- **2026-11-10** -- engine patch 0127: tools/share_gate.py, the served exactness gate for kept-state changes.
+  The tool the 0113-0126 measurements were taken with: against a serving lane it checks resumed = fresh at calibrated
+  prompt sizes, concurrent = alone at each level, drafted = plain, with a per-run nonce so a cold run is cold.
 - **2026-11-10** -- engine patches 0125-0126: a failed disk recall under TF_KV_SHARE costs a cold prefill, not the lane; a fault drill.
   Before, a disk op failing on rank 1 inside a recall ended both ranks (`rank 1 stopped (SnapshotSize); this rank stops
   too`). Now the recall is given up cleanly and the request prefills cold. Drill on two DGX Sparks (2026-11-10,
