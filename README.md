@@ -201,7 +201,7 @@ After the first start, check before trusting those numbers on your pair:
 ```bash
 docker logs glm53-spark 2>&1 | grep -E "pages of 512|conversation states on disk"   # pages, the reserve, "27 of TF_KV_SHARE=32 kept states' slots"
 awk '/MemAvailable/{printf "%.1f GiB\n", $2/1048576}' /proc/meminfo                  # on both Sparks, under load: stay above 3 GiB
-python3 <TensorFold checkout>/tools/share_gate.py http://127.0.0.1:8888 --model GLM-5.3-Flash --sizes 4096,126976 --levels 1,8
+python3 scripts/share_gate.py http://127.0.0.1:8888 --model GLM-5.3-Flash --sizes 4096,126976 --levels 1,8
 ```
 
 Know before you rely on it: every engine rebuild opens a new, empty disk store (its directory is named by a hash that
