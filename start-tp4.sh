@@ -23,6 +23,11 @@ case "${1:-}" in
 esac
 (( $# <= 1 )) || fail E_CONFIG 'Usage: ./start-tp4.sh [restart].'
 validate_config
+# KV_SHARD=1 (engine patch 0114 here) shards each stream's latent rows over two ranks and refuses any other world
+# (KvShardNeedsTwoRanks): stop here, before anything runs, rather than after the four ranks start.
+[[ "$KV_SHARD" != 1 ]] || fail E_CONFIG 'KV_SHARD=1 runs at TP=2 only (engine patch 0114): unset KV_SHARD for ./start-tp4.sh.'
+# PROMPT_CACHE_MIN_GIB is start.sh's check of the pair's startup lines; this start does not read it.
+[[ -z "$PROMPT_CACHE_MIN_GIB" ]] || warn W_CONFIG "PROMPT_CACHE_MIN_GIB=$PROMPT_CACHE_MIN_GIB is not checked by ./start-tp4.sh; see rank 0's prompt cache line after LIVE."
 set_image
 inspect_model
 # The ring carries every exchange on NCCL unless ROCE_RING=on (tp4_rank_env adds the engine's four-rank RoCE ring
@@ -125,6 +130,41 @@ case "$CHAT_TEMPLATE" in
   *) fail E_CONFIG 'CHAT_TEMPLATE must be auto, none or an absolute file path.' ;;
 esac
 [[ -z "$TEMPLATE_FILE" || -f "$TEMPLATE_FILE" ]] || fail E_CONFIG "Chat template not found: $TEMPLATE_FILE"
+# EFFORT_LINE=thinking: the served template is the chosen one (the checkpoint's own with VISION=0) with its effort line
+# set from reasoning_effort, which the engine passes with thinking on only (null with thinking off: prompt.zig), so a
+# thinking-off prompt no longer carries `<|system|>Reasoning Effort: Max`. Written to STATE_DIR every start; the base
+# line must be the one the checkpoint ships, else the start stops rather than serve a template it did not understand.
+# With VISION=0 the base is the checkpoint's own file, which the default MODEL_SOURCE=download fetches in step 3: until
+# that download is complete (weights_ready), step 3 writes the template after it (EFFORT_AFTER_DOWNLOAD). Every other
+# start checks and writes it here, before anything runs or a serving pair is stopped.
+effort_template() {
+  if [[ "$DRY_RUN" == 1 && "$EFFORT_AFTER_DOWNLOAD" == 1 && ! -f "$EFFORT_BASE" ]]; then
+    log "Then write $STATE_DIR/chat_template.jinja: the downloaded $EFFORT_BASE with its effort line taken from reasoning_effort (EFFORT_LINE=thinking)."
+    return 0
+  fi
+  [[ -f "$EFFORT_BASE" ]] || fail E_CONFIG "Chat template not found: $EFFORT_BASE (EFFORT_LINE=thinking rewrites its effort line)."
+  [[ "$DRY_RUN" == 1 ]] || mkdir -p "$STATE_DIR"
+  python3 - "$EFFORT_BASE" "$STATE_DIR/chat_template.jinja" "$DRY_RUN" <<'PY' || fail E_CONFIG "EFFORT_LINE=thinking: $EFFORT_BASE has no effort line this recipe knows; set EFFORT_LINE=always or CHAT_TEMPLATE to a file."
+import sys
+base = "{%- set effective_reasoning_effort = reasoning_effort if reasoning_effort is defined and reasoning_effort in ['low', 'high'] else 'max' -%}"
+line = "{%- set effective_reasoning_effort = (reasoning_effort if reasoning_effort in ['low', 'high'] else 'max') if (reasoning_effort is defined and reasoning_effort is not none) else none -%}"
+src = open(sys.argv[1], encoding="utf-8").read()
+if src.count(base) != 1:
+    sys.exit(1)
+if sys.argv[3] != "1":  # DRY_RUN=1 checks the base and writes nothing
+    open(sys.argv[2], "w", encoding="utf-8").write(src.replace(base, line))
+PY
+}
+EFFORT_AFTER_DOWNLOAD=0
+if [[ "$CHAT_TEMPLATE" == auto && "$EFFORT_LINE" == thinking ]]; then
+  EFFORT_BASE=${TEMPLATE_FILE:-$MODEL_DIR/chat_template.jinja}
+  if [[ -z "$TEMPLATE_FILE" && "$MODEL_SOURCE" == download ]] && ! weights_ready "$MODEL_DIR" "$MODEL_REVISION"; then
+    EFFORT_AFTER_DOWNLOAD=1
+  else
+    effort_template
+  fi
+  TEMPLATE_FILE="$STATE_DIR/chat_template.jinja"
+fi
 
 build_serve_args() {
   local -a extra=()
@@ -143,6 +183,9 @@ build_serve_args() {
     [[ -z "$MTP_CONFIDENCE" ]] || SERVE_ARGS+=(--mtp-confidence "$MTP_CONFIDENCE")
   fi
   [[ -z "$PROMPT_CACHE_GIB" ]] || SERVE_ARGS+=(--prompt-cache-gib "$PROMPT_CACHE_GIB")
+  # LEARN_GIB: engine patch 0113 keeps the prompt states on disk too (rank 0's CACHE_DIR/learn holds every rank's part)
+  [[ "$LEARN_GIB" == 0 ]] || SERVE_ARGS+=(--learn-conversations --learn-dir /state/learn --learn-gib "$LEARN_GIB"
+    --learn-min-free-gib "$LEARN_MIN_FREE_GIB")
   read -r -a extra <<< "$SERVE_EXTRA_ARGS"
   SERVE_ARGS+=("${extra[@]}")
 }
@@ -153,7 +196,7 @@ declare -a PASS_ENV=()
 MANAGED_ENV=' HOME HF_HUB_OFFLINE CUDA_DEVICE_ORDER CUDA_VISIBLE_DEVICES TENSORFOLD_NO_UPDATE_CHECK TENSORFOLD_NO_LIVE
  TENSORFOLD_MEMORY_RESERVE_GIB TF_GLM_DENSE_BITS TF_GLM_HEAD_BITS TF_GLM_CLEAR_THINKING TF_GLM_RANK TF_GLM_WORLD TF_CUDA_DEVICE
  TF_KV_PAGES TF_GLM_CE_EXCHANGE TF_GLM_ABSORB_MMA TF_GLM_W8A8 TF_GLM_HOST_CACHE_GIB TENSORFOLD_PREFILL_SHARE TENSORFOLD_PREFILL_BUDGET TF_PROMPT_CACHE_FIRST
- TF_ROCE TF_ROCE_RING TF_ROCE_MAX_KB TF_ROCE_HCA TF_BIN TF_REPO TF_REF TF_GLM_PREFILL_REDUCE
+ TF_GLM_KV_SHARD TF_GLM_L2PF TF_EXTRA_EOS TF_THINK_OFF_SPLIT TF_ROCE TF_ROCE_RING TF_ROCE_MAX_KB TF_ROCE_HCA TF_BIN TF_REPO TF_REF TF_GLM_PREFILL_REDUCE
  NCCL_COMM_ID NCCL_SOCKET_IFNAME NCCL_IB_HCA NCCL_IB_GID_INDEX NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_ALGO NCCL_GRAPH_FILE
  NCCL_CROSS_NIC NCCL_IB_SUBNET_AWARE_ROUTING NCCL_P2P_DISABLE NCCL_SHM_DISABLE NCCL_IB_MERGE_NICS NCCL_IB_SUBNET_PREFIX_LEN
  NCCL_RUNTIME_CONNECT NCCL_CUMEM_ENABLE NCCL_CUMEM_HOST_ENABLE '
@@ -170,6 +213,12 @@ build_env_args() {
   [[ -z "$PREFILL_BUDGET" ]] || ENV_ARGS+=(-e "TENSORFOLD_PREFILL_BUDGET=$PREFILL_BUDGET")
   # CACHE_FIRST=1: engine patch 0112 sets PROMPT_CACHE_GIB aside before the streams' windows (every rank alike)
   [[ "$CACHE_FIRST" != 1 ]] || ENV_ARGS+=(-e "TF_PROMPT_CACHE_FIRST=1")
+  # L2PF=1: engine patch 0117 prefetches each decode window's next weights into L2 (every rank must agree)
+  [[ "$L2PF" != 1 ]] || ENV_ARGS+=(-e "TF_GLM_L2PF=1")
+  # EXTRA_EOS: engine patch 0120 ends a reply at these tokens too (every rank alike)
+  [[ "$EXTRA_EOS" == none ]] || ENV_ARGS+=(-e "TF_EXTRA_EOS=$EXTRA_EOS")
+  # THINK_OFF_SPLIT: engine patch 0121 moves a thinking-off draft closed by </think> into reasoning_content
+  [[ "$THINK_OFF_SPLIT" == 0 ]] || ENV_ARGS+=(-e "TF_THINK_OFF_SPLIT=$THINK_OFF_SPLIT")
   PASS_ENV=()
   while IFS= read -r key; do
     [[ "$MANAGED_ENV" != *" $key "* ]] || continue
@@ -224,7 +273,7 @@ launch() {
   log "Ranks:"
   show_ranks
   if [[ "$DRY_RUN" != 1 ]]; then
-    mkdir -p "$RUN_LOG_DIR" "$CACHE_DIR/home"
+    mkdir -p "$RUN_LOG_DIR" "$CACHE_DIR/home" "$CACHE_DIR/learn"
     ln -sfn -- "$RUN_LOG_DIR" "$LOG_DIR/current"
   fi
   for i in 3 2 1; do
@@ -453,6 +502,7 @@ tp4_ship_image
 step 3 'Download or check the checkpoint and the drafter weights'
 prepare_weights
 model_overlay
+[[ "$EFFORT_AFTER_DOWNLOAD" == 0 ]] || effort_template
 
 step 4 'Find the ring, write the NCCL graphs, and mount the weights on the workers'
 detect_ring
@@ -501,9 +551,11 @@ if [[ "$DRY_RUN" != 1 ]]; then
   if [[ "$CONTEXT" == auto ]]; then
     remember_context "$FIT_KEY" "$CTX"
     log "Context: $CTX tokens (kept for the next start with these settings; delete $FIT_FILE to probe again)."
-    pool=$(grep -ho 'taking [0-9]* pages of 512 rows' "$RUN_LOG_DIR/rank0.log" 2>/dev/null | tail -1 | grep -o '[0-9]*' | head -1)
+    # Windows (KV_PAGES=off, or auto with KV=fp8) have no pages line, so no pool to report and no pipefail exit.
+    pool=$(grep -ho 'taking [0-9]* pages of 512 rows' "$RUN_LOG_DIR/rank0.log" 2>/dev/null | tail -1 | grep -o '[0-9]*' | head -1) || true
     [[ -z "$pool" ]] || log "KV pool: $pool pages = $(( pool * 512 )) tokens shared by $PARALLEL streams (one request up to $CTX)."
-    grep -q "$PARALLEL streams at once" "$RUN_LOG_DIR/rank0.log" 2>/dev/null ||
+    # One stream reads "1 stream at once"; auto names no count.
+    [[ "$PARALLEL" == auto ]] || grep -qE "(^|[^0-9])$PARALLEL streams? at once" "$RUN_LOG_DIR/rank0.log" 2>/dev/null ||
       warn W_STREAMS "The engine serves fewer than PARALLEL=$PARALLEL streams at once; see the startup line in $RUN_LOG_DIR/rank0.log."
   elif (( ATTEMPT == 2 )); then
     log "Context: $CTX tokens, not the $CONTEXT asked; set CONTEXT=$CTX in scripts/local.sh to skip the refused start."

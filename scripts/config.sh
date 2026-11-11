@@ -213,16 +213,58 @@ PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-}"         # --prompt-cache-gib of device 
 # getting what whole windows leave. For long agent sessions: PARALLEL streams and a cache that keeps them. Needs
 # PROMPT_CACHE_GIB. 0 (default): windows first, as before.
 CACHE_FIRST="${CACHE_FIRST:-0}"
+# PROMPT_CACHE_MIN_GIB: the smallest prompt cache a start may serve with, in GiB. The engine funds the cache from the
+# room each rank has at that start (it varies by a GiB or more between starts), and PROMPT_CACHE_GIB only caps it, even
+# with CACHE_FIRST=1. With a value here, start.sh reads each rank's startup line and stops both ranks (E_CACHE) before
+# LIVE when one funds less. Empty (default): no check.
+PROMPT_CACHE_MIN_GIB="${PROMPT_CACHE_MIN_GIB:-}"
 # TF_GLM_HOST_CACHE_GIB, the kept prompt states' pinned host tier. On a discrete card that memory is free; on GB10 it
 # is the very memory the KV pool and the weights draw on, and a state in it costs a copy to restore, so the tier is off
 # here and PROMPT_CACHE_GIB (device pages) is the one to raise. Unset or auto would pin a quarter of MemAvailable,
 # up to 16 GiB over the two ranks.
 HOST_CACHE_GIB="${HOST_CACHE_GIB:-0}"
+# LEARN_GIB (engine patch 0113, --learn-conversations): kept prompt states also go to disk under CACHE_DIR/learn,
+# every rank's part in rank 0's store, so a conversation resumes after its device copy is evicted or the pair
+# restarts. The GiB of disk the states may take; 0 (default): off, as before. LEARN_MIN_FREE_GIB: no state is
+# written while the disk has less free.
+LEARN_GIB="${LEARN_GIB:-0}"
+LEARN_MIN_FREE_GIB="${LEARN_MIN_FREE_GIB:-15}"
+# KV_SHARD=1 (engine patch 0114, TF_GLM_KV_SHARD): each stream's FP8 latent rows live on one Spark (its owner) instead
+# of both, so the same memory holds about twice the tokens; the other Spark's queries go to the owner for attention
+# (1-4% decode). Needs KV=fp8, KV pages, DFlash2 or no drafter, PARALLEL above 1. The pool then takes most of the
+# room: pair it with CACHE_FIRST=1 PROMPT_CACHE_GIB so long conversations stay kept. 0 (default): off, as before.
+KV_SHARD="${KV_SHARD:-0}"
+# L2PF=1 (engine patch 0117, TF_GLM_L2PF, ported from upstream): each decode window reads the next layer's mixer
+# weights, this layer's router and KDA's o_proj into L2 on a side stream while the gathers and chains run (not the
+# EXL3 routed experts). Upstream turns it on by default on GB10 at TP>=2; on this pair (2026-11-11) it gave +2% at one
+# stream and nothing measurable at four or eight, token hashes identical. Both ranks must agree (the fingerprint
+# carries it). 0 (default): off, as before.
+L2PF="${L2PF:-0}"
 VISION="${VISION:-1}"                            # --vision: images (rank 0's tower)
 VISION_MAX_IMAGES="${VISION_MAX_IMAGES:-50}"     # --vision-max-images: images per request (engine default 4, at most 64)
 # --chat-template: auto = with VISION=1, templates/glm-5.3-flash-vision.jinja (the checkpoint's own template, whose media
 # branch writes GLM's image and video markers instead of a "cannot see" note); none = the checkpoint's; or a file path
 CHAT_TEMPLATE="${CHAT_TEMPLATE:-auto}"
+# The template's "Reasoning Effort" line. The checkpoint's template (and the vision copy) sets it to Max unless a
+# request's effort is low or high, so every prompt carries `<|system|>Reasoning Effort: Max`, thinking off included,
+# and a thinking-off reply then reasons in its answer (a 64-token "digits only" question runs out of tokens mid-sum).
+# TensorFold v0.6.0's recipe wrote the line with thinking on only. thinking (default): the same here -- the served
+# template is written to STATE_DIR/chat_template.jinja from the chosen one, its line taken from reasoning_effort,
+# which the engine passes with thinking on only; always: the template as it is. CHAT_TEMPLATE=auto only; a template
+# of your own decides for itself.
+EFFORT_LINE="${EFFORT_LINE:-thinking}"
+# EXTRA_EOS (engine patch 0120, TF_EXTRA_EOS): tokens that end a reply besides the checkpoint's EOS ids
+# (<|endoftext|>, <|user|>, <|observation|>), comma-separated. GLM-5.3 can close a reply with <|assistant|>, which
+# its generation_config leaves out: the token then reaches the reply as text and the model writes a second turn of
+# its own until MAX_TOKENS. none: the checkpoint's list only.
+EXTRA_EOS="${EXTRA_EOS:-<|assistant|>}"
+# THINK_OFF_SPLIT (engine patch 0121, TF_THINK_OFF_SPLIT): with thinking off, GLM-5.3 sometimes drafts in its reasoning
+# voice anyway and writes </think> before its answer. A chat reply that writes that token within its first
+# THINK_OFF_SPLIT tokens gets the text before it as reasoning_content and the rest as content, as a thinking reply
+# does. While a reply streams, its content waits until the token, the end or THINK_OFF_SPLIT tokens (whichever comes
+# first), so a long thinking-off reply's first content arrives up to that many tokens later. 0 (default): off, since
+# that hold delays every streamed thinking-off reply; 1024 is the hold its author measured.
+THINK_OFF_SPLIT="${THINK_OFF_SPLIT:-0}"
 THINKING="${THINKING:-0}"                        # --thinking / --no-thinking default; requests override
 REASONING_EFFORT="${REASONING_EFFORT:-xhigh}"    # --reasoning-effort low|medium|high|xhigh (empty: omit); xhigh renders the checkpoint's trained "Reasoning Effort: Max" line
 MAX_TOKENS="${MAX_TOKENS:-32768}"                # --max-tokens default reply limit

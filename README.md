@@ -19,7 +19,7 @@
 
 **Engine: TensorFold 1.1.9** (`tensorfold-native --version`), upstream commit
 [`f350cd3e`](https://github.com/ashhart/TensorFold/commit/f350cd3ea253a042e205746928271f9d8f71a82d) plus this recipe's
-112 engine patches (`patches/engine/`).
+121 engine patches (`patches/engine/`).
 
 This recipe serves GLM-5.3-Flash from an EXL3 checkpoint on **two NVIDIA DGX Sparks** (GB10, 128 GB unified memory
 each) at tensor parallel 2, one rank on each Spark, over their ConnectX-7 link. It uses TensorFold's native Zig/CUDA
@@ -49,11 +49,12 @@ The engine is TensorFold 1.1.9 at commit `f350cd3e` ([ashhart/TensorFold](https:
 
 ## What is checked
 
-112 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
+121 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
 reaches the worker by content; link discovery finds both PCIe twins of the cabled port and the RoCE v2 GID that
 holds each port's own IPv4; NCCL and the engine's RDMA all-gather run over the cable; the full 1,048,576-token window
 serves 8 streams beside a 3.6 GiB prompt cache; greedy replies are byte-stable across every change
-([CHANGELOG.md](CHANGELOG.md)). Image input was checked by a user (issue 8: PNG, and four frames in order); video input
+([CHANGELOG.md](CHANGELOG.md)); sparkDash's quality suite scores the served template's effort line
+([The effort line](#the-effort-line)). Image input was checked by a user (issue 8: PNG, and four frames in order); video input
 needs the `WITH_VIDEO=1` image (checked here: a three-colour clip described in order). `W8A8` is stashed on quality.
 
 ## Performance
@@ -138,37 +139,26 @@ prompt's first token comes about 47% later than at `1`. Replies are byte-identic
 
 ## Memory on a 128 GB unified Spark
 
-- VRAM and system RAM are one pool. The budget is `MemAvailable` plus parked pages, minus `MEMORY_RESERVE_GIB`; per
-  Spark on the served pair: model 83.3 GiB, KV pool 12.5 GiB (4,098 pages, 2.1M tokens), prompt cache 3.6 GiB, 9.5 GiB
-  reserve kept free.
-- **The page pool takes whole 1M windows before the prompt cache**, so a larger room can silently leave the cache at
-  zero and every chat turn re-reads its history. The 9.5 GiB reserve holds the pool at two windows; after a start,
-  rank 0's startup line must show `4098 pages`, `prompt cache: N GiB` and no `cannot keep one state` warning.
-- **The cache is funded from the remainder**, so `PROMPT_CACHE_GIB` only caps it: room after the reserve, minus the
-  pool, minus about 0.42 GiB of fixed state for each stream past the first (measured on issue 3). Eight streams at
-  the 1M window leave 0.7-0.9 GiB whatever the cap says; `PARALLEL=4` at the same window funds an 8 GiB cap, and a
-  190k-token prompt then resumes at 99%. The room itself differs by a few GiB between Sparks (DGX OS builds), so a
-  pair with more room than ours needs a larger reserve to stay at two windows, and one with less room gets a smaller
-  cache (1.2 GiB with 2.4 GiB less room, issue 7); the startup line is the check.
-- **What the cache keeps, at this pin** (issues 3 and 7): hits land on the 4,096-row prompt-chunk grid, so a
-  4,870-token prompt resumes 4,096 and up to 4,095 trailing tokens are prefilled again each turn (about 2.5 s); the
-  cache is device memory only, and nothing survives a restart (the CUDA GLM family refuses `--learn-conversations`
-  at `f350cd3e`). A 1.2 GiB cache kept one conversation up to 252k tokens but not 378k, and two of eight ~38k
-  conversations recalled newest first. For many long-lived agent sessions, size `PARALLEL` and `CONTEXT` for the
-  cache (see above) rather than for the stream count.
-- **Long agent sessions: `CACHE_FIRST=1 PROMPT_CACHE_GIB=12`** (engine patch 0112). The cache is set aside before
-  the room is counted in whole windows, so the eight streams share one 1M window of pages (2,056 pages, any request
-  still up to 1,048,576 tokens) and the cache gets the rest. Measured on the pair (2026-11-06) at the served
-  `PARALLEL=8` and 1M window: rank 0 funds a 9.3-9.7 GiB cache (the startup log says when the room funds less than
-  `PROMPT_CACHE_GIB` asks); a 380k-token conversation, then eight unique ~31k ones, then the long one's next turn
-  resumes 99% cached (3.0 s instead of 234 s), and all eight short ones resume. Decode and reply hashes are unchanged,
-  and three concurrent agent loops ran as fast as without it. Without it, the served config resumes 1 of 8 and not the
-  long one. The trade: the streams together hold one window's tokens at a time instead of two, so a second
-  request past ~1M tokens of live context waits. `PARALLEL=2 CONTEXT=524288 PROMPT_CACHE_GIB=32` also keeps them
-  (12.4 GiB), at two streams. There is no disk tier yet, so nothing survives a restart.
-- `HOST_CACHE_GIB=0` on GB10 (a pinned host tier takes the pool's own memory). The memory guard stops the pair in
-  order when a Spark stays under 2.5 GiB available, and logs that to `logs/current/memguard.log`. To free memory:
-  lower `PARALLEL`, `DENSE`/`HEAD` bits or `VISION=0`; raise `MEMORY_RESERVE_GIB` on out-of-memory errors.
+- VRAM and system RAM are one pool: the budget is `MemAvailable` plus parked pages, minus `MEMORY_RESERVE_GIB` (9.5).
+  Per Spark on the served pair: model 83.3 GiB, KV pool 12.5 GiB (4,098 pages, 2.1M tokens), prompt cache 3.6 GiB.
+- **The page pool takes whole 1M windows first; the prompt cache gets the rest**, so `PROMPT_CACHE_GIB` only caps
+  it, and each stream past the first costs about 0.42 GiB. Room differs by a few GiB between Sparks. After every
+  start or change, check rank 0's startup line: `4098 pages`, `prompt cache: N GiB`, no `cannot keep one state`.
+- **Cache hits land on a 4,096-token grid** (up to 4,095 trailing tokens re-prefilled, about 2.5 s), and the cache
+  lives in device memory only unless `LEARN_GIB` is set.
+- **Long agent sessions: `CACHE_FIRST=1 PROMPT_CACHE_GIB=12`** (patch 0112). The cache is set aside first; the eight
+  streams share one 1M window (2,056 pages) and rank 0 funds a 9.3-9.7 GiB cache. A 380k-token conversation resumes
+  99% cached (3.0 s instead of 234 s) alongside eight ~31k ones; decode and hashes unchanged. Trade: a second request
+  past ~1M tokens of live context waits.
+- **Conversations on disk: `LEARN_GIB=30`** (patch 0113, off by default). Prompt states are also written to
+  `CACHE_DIR/learn`, so a conversation resumes after eviction or restart: 102.5k tokens in 1.8 s instead of 58.4 s
+  cold. About 1% decode cost while writing; nothing is written under `LEARN_MIN_FREE_GIB` (15) free.
+- **KV sharding: `KV_SHARD=1`** (patch 0114, off by default; TP=2 only). Each stream's latent rows live on one Spark, doubling
+  the pool (8,196 pages, 4.2M tokens) for 1-4% decode; greedy replies identical. Pair it with
+  `CACHE_FIRST=1 PROMPT_CACHE_GIB=6` (4.1 GiB cache, 6,147 pages). Toggling it starts an empty `LEARN_GIB` store.
+- `HOST_CACHE_GIB=0` on GB10. The memory guard stops the pair when a Spark stays under 2.5 GiB available
+  (`logs/current/memguard.log`). To free memory: lower `PARALLEL`, `DENSE`/`HEAD` bits or `VISION=0`; raise
+  `MEMORY_RESERVE_GIB` on out-of-memory errors.
 
 ## CONTEXT=auto
 
@@ -208,15 +198,22 @@ variables. **The served pair's `local.sh`** sets `PORT=8888`, `PARALLEL=8`, `CON
 | `PREFILL_SHARE`, `PREFILL_BUDGET` | `0.68`, empty | See [Prefill beside decoding](#prefill-beside-decoding) |
 | `CONTEXT`, `CONTEXT_MAX` | `auto`, `1048576` | See [CONTEXT=auto](#contextauto) |
 | `KV`, `KV_PAGES` | `fp8`, `on` | `--kv-cache`, one shared pool of 512-row pages with `CONTEXT` as one request's cap |
-| `DENSE`, `HEAD` | `q8`, `q8` | `bf16`, `q8`, `q6` or `q4` for the dense linears and the LM head |
+| `DENSE`, `HEAD` | `q8`, `bf16` | `bf16`, `q8`, `q6` or `q4` for the dense linears and the LM head; the pair's `local.sh` sets `HEAD=q8` |
 | `MEMORY_RESERVE_GIB`, `HOST_CACHE_GIB`, `PROMPT_CACHE_GIB` | `12`, `0`, empty | See [Memory](#memory-on-a-128-gb-unified-spark); the pair runs the reserve at 9.5 |
+| `LEARN_GIB`, `LEARN_MIN_FREE_GIB` | `0`, `15` | `LEARN_GIB` > 0 keeps the prompt states on disk too, up to that many GiB (`--learn-conversations`, patch 0113); see [Memory](#memory-on-a-128-gb-unified-spark) |
+| `KV_SHARD` | `0` | `1` keeps each stream's latent rows on one Spark (`TF_GLM_KV_SHARD`, patch 0114): about twice the tokens, 1-4% decode; use with `CACHE_FIRST=1 PROMPT_CACHE_GIB=6`, see [Memory](#memory-on-a-128-gb-unified-spark). Needs `KV=fp8`, `KV_PAGES=on`, DFlash2 or no drafter, `PARALLEL` auto or above 1. TP=2 only: `./start-tp4.sh` refuses it |
+| `L2PF` | `0` | `1` prefetches each decode window's next weights into L2 on a side stream (`TF_GLM_L2PF`, patch 0117, from upstream): the next layer's mixer input, this layer's router and KDA's `o_proj`, not the EXL3 routed experts. Upstream turns it on at TP>=2 on GB10; here it measured +2% at one stream and flat at four and eight (exact), so it stays opt-in. `TF_GLM_L2PF_MB`, `_CTAS`, `_PACE_GBPS` (12, 2, 150) pass through as exported `TF_*` variables |
 | `CACHE_FIRST` | `0` | `1` sets `PROMPT_CACHE_GIB` (required) aside before the streams' windows (`TF_PROMPT_CACHE_FIRST`, patch 0112), so the cap becomes the cache; see [Memory](#memory-on-a-128-gb-unified-spark) |
+| `PROMPT_CACHE_MIN_GIB` | empty | The smallest prompt cache a start may serve with. `start.sh` reads each rank's startup line and stops both ranks before LIVE (`E_CACHE`) when one funds less; the cache is what that start's room leaves, so `PROMPT_CACHE_GIB` caps it but does not guarantee it, even with `CACHE_FIRST=1` (issue 16). Empty: no check. `./start-tp4.sh` does not check it |
 | `WITH_VIDEO` | `0` | `1` builds `libtfvideo.so` (FFmpeg 9.0.2, static, LGPL; h264/hevc/vp8/vp9/mpeg4 in mp4/mkv) into its own image tag, so `VISION=1` serves `video_url` parts; a few minutes more at build |
 | `VISION`, `VISION_MAX_IMAGES`, `CHAT_TEMPLATE` | `1`, `50`, `auto` | Image input (`image_url` parts) on rank 0's tower, with `templates/glm-5.3-flash-vision.jinja`. `video_url` parts too with `WITH_VIDEO=1` (otherwise HTTP 500, issue 8); audio parts are unsupported and an mp4's audio track is ignored |
-| `THINKING`, `REASONING_EFFORT`, `MAX_TOKENS`, `CLEAR_THINKING` | `0`, `high`, `32768`, `1` | Request defaults; earlier turns' reasoning is dropped from the prompt |
+| `THINKING`, `REASONING_EFFORT`, `MAX_TOKENS`, `CLEAR_THINKING` | `0`, `xhigh`, `32768`, `1` | Request defaults (`xhigh` renders the checkpoint's trained "Reasoning Effort: Max" line); earlier turns' reasoning is dropped from the prompt |
+| `EFFORT_LINE` | `thinking` | The template's `<|system|>Reasoning Effort: Max` line with thinking on only, as TensorFold v0.6.0's recipe wrote it (the served template is written to `.state/chat_template.jinja`); `always` keeps the checkpoint's template, which writes it into every prompt and makes a thinking-off reply reason in its answer. See [The effort line](#the-effort-line) |
+| `EXTRA_EOS` | `<\|assistant\|>` | Tokens that end a reply besides the checkpoint's EOS ids, comma-separated (`TF_EXTRA_EOS`, patch 0120). GLM-5.3 can close a reply with `<\|assistant\|>`, which its `generation_config.json` leaves out; without it the token reaches the reply as text and the model writes a second turn until `MAX_TOKENS`. `none`: the checkpoint's list only |
+| `THINK_OFF_SPLIT` | `0` | With thinking off, a chat reply that writes `</think>` within its first this-many tokens gets the text before it as `reasoning_content` and the rest as `content` (`TF_THINK_OFF_SPLIT`, patch 0121). GLM-5.3 sometimes drafts in its reasoning voice with thinking off; without the split the draft and the marker are the answer. A streamed reply's content waits until the marker, the end or this many tokens. `0`: off |
 | `ABSORB_MMA`, `W8A8` | `1`, `0` | Prompt numerics: `ABSORB_MMA` is free (+8.0%, identical answers); `W8A8` rounds activations and stays off |
 | `CE_EXCHANGE` | `0` | Needs CUDA IPC between ranks, which two Sparks do not have |
-| `SERVED_NAME`, `SERVE_EXTRA_ARGS`, `TENSORFOLD_API_KEY` | `GLM-5.3-Flash`, empty, unset | The model id clients send; more `serve` flags; a bearer key for every route but `/health` |
+| `SERVED_NAME`, `SERVE_EXTRA_ARGS`, `TENSORFOLD_API_KEY` | `GLM-5.3-Flash`, empty, unset | The model id clients send; more `serve` flags; a bearer key for every route but `/health`. Requests that send no sampling fields get the checkpoint's `generation_config.json` (temperature 1.0, top_p 0.95) and no `top_k`; the pair's `local.sh` sets `SERVE_EXTRA_ARGS='--top-k 20'`, the old deployment's default (greedy replies unchanged) |
 
 ### Build, checks and timeouts
 
@@ -267,20 +264,53 @@ What it does, streamed or not:
 - A request that offers no tools (none sent, or `tool_choice: "none"`) whose history called tools gets a closing system
   note that tools are unavailable for this reply, and any `<tool_call>` block the model writes anyway is removed. The
   reply is then prose (the model answers from what it has) or empty (it only wanted to call).
-- A request that offers tools has calls to tools it did not offer, and malformed calls, removed; calls to offered tools
-  come back as `tool_calls` as before.
+- A request that offers tools has well-formed calls to tools it did not offer removed; calls to offered tools come back
+  as `tool_calls` as before. A malformed call (no name, a name over two lines, broken JSON) stays in the reply as
+  text, as with the guard off, so the client and the log show what the model wrote. When removing calls would leave
+  the reply with no text and no call, they stay too: an empty reply reads to an agent as a failed generation, and
+  Hermes retries it unchanged until its timeout (patch 0116).
 - Each removal is logged: `docker logs glm53-spark 2>&1 | grep "tool-call guard"`.
+
+Guard on or off, every call the server does not turn into `tool_calls` gets one log line with the request id, the
+reason (`unknown_tool_name`, `malformed`, or `unclosed` for a call cut before its closer), the tool name, the
+request's thinking mode, and what became of it:
+
+```
+tool call rejected from chatcmpl-…: malformed [''] (23 tools offered) thinking=True effort=max; kept as text
+```
+
+`docker logs glm53-spark 2>&1 | grep "tool call rejected"` lists them. To see the envelope the model wrote, add
+`export TF_TOOL_CALL_DEBUG=1` to `scripts/local.sh` and restart: each line is then followed by the envelope's text
+(escaped to one line and cut at about 1 KB). The text is the model's output, so leave it off where logs are shared.
+
+An agent error such as Hermes' `tool_call calls[0] requires a 'name'` is not the server's: Hermes offers a bridge
+tool named `tool_call` for its deferred tools, the server passed the model's call to it as `tool_calls`, and Hermes
+refused the arguments. No `tool call rejected` line goes with it.
 - Off (the default), every reply is byte-identical to a build without the patch. On, replies to ordinary requests are
   unchanged too (same greedy hashes, same speed): the guard only acts on the requests above.
 
 Leave it off for a client that reads tool calls out of the reply text itself (tools described in its own system prompt,
 no `tools` field): the guard would remove the calls that client is waiting for.
 
+## The effort line
+
+The checkpoint's chat template opens every prompt with `<|system|>Reasoning Effort: Max` (unless `reasoning_effort`
+is `low` or `high`), thinking off included, and a thinking-off reply then reasons in its answer. TensorFold v0.6.0's
+recipe wrote the line with thinking on only.
+
+`EFFORT_LINE=thinking` (default) does the same: `start.sh` serves a copy of the template
+(`.state/chat_template.jinja`) that writes the line only when thinking is on. `EFFORT_LINE=always` serves the
+template as it is; a `CHAT_TEMPLATE` of your own is always served as it is.
+
+Measured with sparkDash's quality suite (greedy, 755 items): with the line in every prompt, QA 79.3% against
+v0.6.0's 84.0% and MMLU 91.2%; with `EFFORT_LINE=thinking`, QA 86.0% (140 of 150 replies byte-identical to v0.6.0's)
+and MMLU 88.4%, thinking-on categories unchanged.
+
 ## Engine patches
 
-`patches/engine/` holds 112 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
+`patches/engine/` holds 121 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
 the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-6000-TensorFold)'s, unchanged;
-0094-0112 are this pair's own or ported from that recipe. None is GB10-specific: the arch-gated kernels test
+0094-0106 and 0111-0121 are this pair's own or ported from that recipe or from upstream. 0107-0110 are the four-Spark patches. None is GB10-specific: the arch-gated kernels test
 `__CUDA_ARCH__ >= 1200`, which `sm_121` satisfies.
 
 | Patches | What they do |
@@ -300,6 +330,15 @@ the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-
 | 0107-0110 | Four Sparks: block FP8 checkpoints, the four-rank RoCE ring all-gather (opt-in), the DFlash2 drafter MLP split across every rank, `TF_GLM_CHUNK_SOLO` (opt-in); see [4 Sparks](#4-sparks-tp4-on-a-ring-experimental) |
 | 0111 | `TF_TOOL_CALL_GUARD=1` (opt-in, off by default): tool-call markup never reaches the client as text. A request that offers no tools (none sent, or `tool_choice: "none"`) although its history called them gets a closing system note that tools are unavailable, and any `<tool_call>` the model writes anyway is hidden; a request that offers tools has calls to tools it did not offer, and malformed calls, hidden. Streamed or whole; each hide is logged (`tool-call guard:`). Off: replies byte-identical |
 | 0112 | `TF_PROMPT_CACHE_FIRST=1` (`CACHE_FIRST=1`, opt-in): the prompt cache is set aside before the room is counted in whole windows; off, the plan is as before. The startup log says when the room funds less cache than `--prompt-cache-gib` asks, and what frees more |
+| 0113 | `--learn-conversations` for GLM on CUDA (`LEARN_GIB`, off by default), a backport of upstream [#1411](https://github.com/ashhart/TensorFold/pull/1411): kept prompt states on disk, every rank's part, written behind the request and read back (ahead of a queued turn when it can) after an eviction or a restart. On this stack the disk image copies 0015's two-tier lease page by page and rank 1's part travels the follow link of 0031. `--spill-gib` and `--checkpoint-slots` are refused for GLM. Off: replies byte-identical |
+| 0114 | KV sharding (`KV_SHARD=1`, `TF_GLM_KV_SHARD`, off by default) at TP=2, toward upstream [#1431](https://github.com/ashhart/TensorFold/issues/1431): each stream's FP8 latent rows on its owner rank, a second page table pointing off-owner at a discard page, owner-computed decode and verify (no new kernel), prompts on a borrowed twin, kept states carried to another owner in 32 MiB pieces, and 0113's disk image under it. Refused by name with the MTP drafter, `--parallel 1`, other KV caches, or a part under 131k tokens. `tf-cuda-test glm-kv-shard-check` checks it against an unsharded twin byte for byte. Off: replies byte-identical |
+| 0115 | **This pair's.** The clean image build prints no compiler warning: two fp8 expert kernels' unread kernel-local `RW`, `prefill_attention`'s readerless `SMEM_MAX`, `glm_mm`'s `Tile` `SMEM` member no instantiation uses, and `flashnext_fact` / `flashnext_attn` unroll loops that sat behind an `if constexpr` they could not reach (now behind the inverted guard, so each instantiation compiles only its reachable side). No arithmetic, launch shape or output changes: all six files' fatbins compile byte-identical |
+| 0116 | **This pair's.** Each tool envelope the parser rejects is logged on its own line: request id, reason (`unknown_tool_name`, `malformed`, `unclosed`), tool name, thinking and effort, and whether it was kept or hidden; `TF_TOOL_CALL_DEBUG=1` adds the envelope text. With `TF_TOOL_CALL_GUARD=1` and tools offered, only well-formed calls to unoffered tools are hidden; malformed calls stay as text, and a reply is never emptied by the guard. Host tests: rejection reasons, the guard's hiding whole and streamed. Guard off: replies byte-identical |
+| 0117 | From upstream (8cc6ac420, a0ddae24d; opt-in): `TF_GLM_L2PF=1` (`L2PF=1`) reads a decode window's next weights into L2 on a side stream while the gathers and chains run, with DeepSeek V4.1's `l2pf` / `l2pace` kernels and their nvcc 13.0 contract records. Three sites a layer: the next mixer's input before `gather_b`, the router (or a dense layer's gate and up) before `gather_a`, KDA's `o_proj` before its chain, including the shared window's batched chains. Only reads; the side stream joins once a window and drains before it is freed. The ranks' fingerprint carries it (layout 16). Off: no side stream, no change. On the pair (2026-11-11, greedy, token hashes identical): one stream 37.6 to 38.4 tok/s (round 55.1 to 53.9 ms), four and eight streams within noise (72.7 to 73.1, 121.1 to 121.4) |
+| 0118 | From upstream (b10fda39f, 1b5ac18bb, 7faa962a0): a reply `max_tokens` cuts inside a JSON `<tool_call>` that has named an offered tool returns that call with its arguments as far as written, as XML and GLM calls already did; a call cut before its name, or naming a tool not offered, stays text (so 0111/0116's guard sees the same offered-only calls). A whole `/v1/messages` reply closes the cut call's input where it parses instead of answering 500. Two local fixes over upstream: a key with no value (`{"name":,`) no longer indexes an empty slice, and the cut call's name matches offered tools trimmed and in any case, as a closed call's does. Changes only replies cut by `max_tokens` in a JSON call. Not yet measured on the pair |
+| 0119 | From upstream (6d4191a95, #2257, adapted): decode windows of 32 rows (0039 had 16), so a context copy verifies up to 31 tokens a round; DFlash2 still drafts 7. Fixes what the wider window exposes on this stack: shared-window scratch is said outright (a 32-row segment no longer shrinks the KDA projection buffer to 4 bytes or drops 0075/0088's one-launch segment attention), the follower's draws hold 32 rows, and the window width joins `--learn-conversations`' store identity. Not taken: load-timed pricing, 15-deep MTP chains, and #1779's shared reservation (upstream turned it off for DFlash2, cc2fa8d23). On the pair (2026-11-11, greedy, token hashes identical): a 1,195-token file rewrite at one stream 151 to 201-205 tok/s decode (14.9 to 26.6 tokens a round); prose at 1/4/8 streams and four-stream rewrites unchanged; 34 MiB more fixed memory a stream |
+| 0120 | `TF_EXTRA_EOS=<token>[,<token>...]` (`EXTRA_EOS`, on by default with `<\|assistant\|>`): the named tokens end a reply like the checkpoint's EOS ids and leave the reply as they do. A name the tokenizer does not hold refuses the start; unset, the EOS list is the checkpoint's |
+| 0121 | `TF_THINK_OFF_SPLIT=<tokens>` (`THINK_OFF_SPLIT`, opt-in, off by default (`THINK_OFF_SPLIT=0`; 1024 is the hold the author measured)): a thinking-off chat reply that writes the think close token within the hold is split like a thinking reply, whole and streamed alike (a stream holds its content until the token, the hold or the end). A close after the hold stays text; raw completions, the JSON channel and logprobs requests are never split. Tests: `zig build test-think-off-split-host` |
 
 Every default-on patch was A/B tested against the image before it: greedy replies identical plus a measured gain.
 
@@ -393,6 +432,9 @@ only ever stops containers labelled `tf.recipe=glm53-spark`.
 | Symptom | Cause and fix |
 | --- | --- |
 | `[E_WORKER]` | ssh, Docker or the NVIDIA runtime is not ready on the worker; the message names which |
+| A reply ends with `<\|assistant\|>` followed by the same answer again, `finish_reason: length` | The checkpoint's EOS list leaves out `<\|assistant\|>`. Keep `EXTRA_EOS` at its default (`<\|assistant\|>`) |
+| With thinking off, `content` starts with a draft ("We need ...") and holds `</think>` | The model reasoned anyway. Set `THINK_OFF_SPLIT=1024` (off by default) so the draft goes to `reasoning_content`; raise it if the draft is longer |
+| A thinking-off reply works the sum out in its answer and `finish_reason` is `length` on a short `max_tokens` | The prompt carries the template's `Reasoning Effort: Max` line (`EFFORT_LINE=always`, or a `CHAT_TEMPLATE` of your own); `EFFORT_LINE=thinking` (default) writes it with thinking on only. `/tokenize` on a one-line user message shows it: 7 tokens more |
 | `[E_FABRIC]` | No directly reached address, or no RoCE v2 GID holding an IPv4 on the link's port: cable the Sparks on one subnet, or set `FABRIC_PEER` / `NCCL_IB_GID_INDEX` |
 | `[W_FABRIC]` a rail left out | The second rail does not carry a full-size ping; check the cable, the twin's address and MTU |
 | `[E_MEMORY]`, `[E_PORT]` | Less than `MIN_AVAIL_GIB` available (another rank, usually), or a port in use |
@@ -401,10 +443,13 @@ only ever stops containers labelled `tf.recipe=glm53-spark`.
 | A long prompt dies in a RoCE gather | The gather has no wait setting at this pin; `ROCE=off` puts every exchange on NCCL |
 | `--parallel N needs … GiB`, `[memguard]` | The window or stream count does not fit, or a Spark went under the floor: lower `CONTEXT`/`PARALLEL` or raise `MEMORY_RESERVE_GIB` |
 | No prompt cache in the startup line, `cannot keep one state` | The page pool took a third window: raise `MEMORY_RESERVE_GIB` (the engine's own hint to lower it is the wrong direction here; see [Memory](#memory-on-a-128-gb-unified-spark)) |
-| A prompt cache far under `PROMPT_CACHE_GIB`; `prompt cache: the room funds X GiB of the Y GiB` | The cap never binds: the cache is the remainder after the pool and the streams' fixed parts. Set `CACHE_FIRST=1`, or lower `PARALLEL` or `CONTEXT` (see [Memory](#memory-on-a-128-gb-unified-spark)) |
+| A prompt cache far under `PROMPT_CACHE_GIB`; `prompt cache: the room funds X GiB of the Y GiB` | The cap never binds: the cache is the remainder after the pool and the streams' fixed parts. Set `CACHE_FIRST=1`, or lower `PARALLEL` or `CONTEXT` (see [Memory](#memory-on-a-128-gb-unified-spark)). With `CACHE_FIRST=1` already on, the pool kept a whole window more than the cache left room for: raise `PROMPT_CACHE_GIB` until the page count drops by a window (issue 16) |
+| `[E_CONFIG] NCCL_SOCKET_IFNAME must be a netdev name.`, or `[W_CONFIG] NCCL_SOCKET_IFNAME=^… is an NCCL exclusion list` | An exported value wins over `scripts/local.sh`. An exclusion list such as `^lo,docker` from `/etc/profile.d` is set aside with that warning and the link is found as when empty (issue 17); any other value must be one netdev: `NCCL_SOCKET_IFNAME=<netdev> ./start.sh`, or `env -u NCCL_SOCKET_IFNAME ./start.sh` |
+| `git pull` will not fast-forward a clone from before 2026-11-04 | The history was rewritten that day, so a clone from then (such as `0049d7c`) shares no commit with `main`: take a fresh clone and carry `scripts/local.sh` and `.env` over (issue 16) |
+| `[E_CACHE] Rank N funds a X GiB prompt cache, under PROMPT_CACHE_MIN_GIB` | That start's room funded less cache than the minimum (the room varies by a GiB or more between starts). Lower `PARALLEL` or `CONTEXT`; with `CACHE_FIRST=1`, a larger `PROMPT_CACHE_GIB` can fund more, because it can cost the streams a whole window (issue 16); or lower the minimum |
 | An exact value (an id, a hash) copied wrong in a JSON reply on `ABLIT=1` | The Ablit weights' own error (issue 9): the published weights copy it right on the same engine and request, and the Ablit weights do too with thinking on. See [Ablit weights](#ablit-weights) |
 | `libtfvideo.so is required for video inputs` (HTTP 500 on a `video_url` part) | The default image builds no video runtime. Set `WITH_VIDEO=1` and `./start.sh restart` (it builds its own image tag); a server that already refused one video request keeps refusing until restarted |
-| Raw `<tool_call>name<arg_key>…</arg_key><arg_value>…</arg_value></tool_call>` text in an agent's reply (Hermes and others) | The client sent that turn without the tool the model called: no `tools`, `tool_choice: "none"` (an agent's final-summary turn after its iteration limit, typically), or a list without that tool. The server only turns calls to offered tools into `tool_calls`. Fix the client (raise its iteration limit, enable the toolset), or turn on the guard: [Hermes and other agents](#hermes-and-other-agents-the-tool-call-guard) |
+| Raw `<tool_call>name<arg_key>…</arg_key><arg_value>…</arg_value></tool_call>` text in an agent's reply (Hermes and others) | The client sent that turn without the tool the model called: no `tools`, `tool_choice: "none"` (an agent's final-summary turn after its iteration limit, typically), or a list without that tool. The server only turns calls to offered tools into `tool_calls`. Fix the client (raise its iteration limit, enable the toolset), or turn on the guard: [Hermes and other agents](#hermes-and-other-agents-the-tool-call-guard). If the tool was offered, the model wrote a malformed call: `docker logs glm53-spark 2>&1 \| grep "tool call rejected"` gives the request id and reason, and `TF_TOOL_CALL_DEBUG=1` the text |
 | The first start takes long | Each rank hashes all 164 GiB once (cached in `CACHE_DIR`); raise `WAIT_TIMEOUT` |
 
 ## Ablit weights
@@ -417,6 +462,29 @@ these weights give their best results. One measured exception (issue 9): asked t
 `LANTERN-ca6241dd2684` in schema-constrained JSON, the Ablit weights drop a digit, with drafting on or off; the
 published weights copy it exactly on the same engine and request, and the Ablit weights do too with thinking on. For
 replies that must copy ids, hashes or numbers exactly, serve `ABLIT=0` or turn thinking on for those requests.
+DFlash2 accepts fewer drafts on these weights; measure them at your own memory settings before choosing a drafter.
+One pair (issue 17) saw drafting turn into a net loss at `local.sh.example`'s `PARALLEL=4 MEMORY_RESERVE_GIB=12`, and
+about 15% below the published weights (74.6% against 79.8% accepted) at the served `PARALLEL=8` with `CACHE_FIRST=1`.
+
+### A partial overlay
+
+`ABLIT=1` serves the whole transplant. `scripts/graft.py` builds a tree of your own: it copies `self_attn.o_proj` for
+the layers you name out of the Ablit repository into a copy of the published weights, byte for byte and at the offsets
+each safetensors header gives, so neither tree is loaded, no framework is needed and nothing but the grafted shards is
+copied (the rest are hardlinks to the parent).
+
+```
+scripts/graft.py ~/.cache/aevonix-glm53/model ~/.cache/aevonix-glm53/model-ablit \
+    ~/.cache/aevonix-glm53/model-partial1529 --layers 15-29 --verify
+# then: MODEL_SOURCE=local MODEL_DIR=~/.cache/aevonix-glm53/model-partial1529
+```
+
+The Ablit repository replaces `self_attn.o_proj` on layers 15-43 and the MTP head (`ABLIT_META.json`), so a subset is a
+subset of that transplant rather than a new one; the graft rebuilds a 164 GiB tree in about 30 s. Measured on the pair:
+15 of 30 layers (15-29) passed all 32 prompts of the refusal suite drowzeys publishes for its Keys overlay, kept issue
+9's exact-copy case (the `LANTERN-ca6241dd2684` reply byte-exact), and decoded at the parent's rate (56.5 / 69.6 tok/s
+code against 59.7 / 62.4, inside this pair's 12% run-to-run spread), where the full 30-layer overlay measured about 15%
+below the parent on code and reproduces the dropped digit. Layer choice is per graft: rebuild the tree to change it.
 
 ## Credits
 
@@ -430,7 +498,7 @@ accounting are adapted from Mia's AI Lab's
 
 Patches 0103-0104 are ported from the lab's own [2x RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-6000-TensorFold).
 Full credits, including the authors of the carried upstream patches (Adam Hillson, ajensenwaud, Bizuayeu,
-SvangenStudios, with their names in each patch's `From:` line), are in [CREDITS.md](CREDITS.md). Required notices are
+SvangenStudios, with their names in each patch's `From:` line), are in [CREDITS.md](CREDITS.md). Patch 0113 is a backport of upstream #1411, and 0114 (KV sharding) is toward upstream #1431, both by Robert Wojciechowski ([@wojo](https://github.com/wojo), X [@rwojo](https://x.com/rwojo)). Required notices are
 in [NOTICE.md](NOTICE.md).
 
 ## License

@@ -53,6 +53,10 @@ validate_config() {
   [[ "$VISION_MAX_IMAGES" =~ ^[1-9][0-9]*$ && VISION_MAX_IMAGES -le 64 ]] || fail E_CONFIG 'VISION_MAX_IMAGES must be 1-64.'
   for key in THINKING VISION CLEAR_THINKING; do [[ "${!key}" =~ ^[01]$ ]] || fail E_CONFIG "$key must be 0 or 1."; done
   [[ -z "$REASONING_EFFORT" || "$REASONING_EFFORT" =~ ^(low|medium|high|xhigh)$ ]] || fail E_CONFIG 'REASONING_EFFORT must be low, medium, high, xhigh or empty.'
+  [[ "$EFFORT_LINE" =~ ^(thinking|always)$ ]] || fail E_CONFIG 'EFFORT_LINE must be thinking or always.'
+  [[ "$EXTRA_EOS" =~ ^[^[:space:],]+(,[^[:space:],]+)*$ ]] \
+    || fail E_CONFIG 'EXTRA_EOS must be none or a comma-separated list of tokens, e.g. <|assistant|>.'
+  [[ "$THINK_OFF_SPLIT" =~ ^[0-9]+$ ]] || fail E_CONFIG 'THINK_OFF_SPLIT must be 0 (off) or a token count, e.g. 1024.'
   [[ "$DRAFTER_BITS" =~ ^[04]$ ]] || fail E_CONFIG 'DRAFTER_BITS must be 4 or 0 (bf16).'
   [[ -z "$MTP_DRAFTS" || ( "$MTP_DRAFTS" =~ ^[0-9]+$ && MTP_DRAFTS -le 64 ) ]] || fail E_CONFIG 'MTP_DRAFTS must be empty or 0-64.'
   [[ -z "$MTP_CONFIDENCE" ]] || { is_number "$MTP_CONFIDENCE" && python3 -c 'import sys; sys.exit(0 if 0 <= float(sys.argv[1]) <= 1 else 1)' "$MTP_CONFIDENCE"; } \
@@ -73,6 +77,14 @@ validate_config() {
   [[ "$CACHE_FIRST" =~ ^[01]$ ]] || fail E_CONFIG 'CACHE_FIRST must be 0 or 1.'
   [[ "$CACHE_FIRST" == 0 ]] || { [[ -n "$PROMPT_CACHE_GIB" ]] && at_least "$PROMPT_CACHE_GIB" 1; } \
     || fail E_CONFIG 'CACHE_FIRST=1 sets PROMPT_CACHE_GIB aside first: set PROMPT_CACHE_GIB to the GiB to keep (1 or more).'
+  is_number "$LEARN_GIB" || fail E_CONFIG 'LEARN_GIB must be a number of GiB (0: off).'
+  [[ "$KV_SHARD" =~ ^[01]$ ]] || fail E_CONFIG 'KV_SHARD must be 0 or 1 (TF_GLM_KV_SHARD).'
+  [[ "$KV_SHARD" == 0 || ( "$KV" == fp8 && "$KV_PAGES" == on && "$DRAFTER" != mtp && "$PARALLEL" != 1 ) ]] \
+    || fail E_CONFIG 'KV_SHARD=1 needs KV=fp8, KV_PAGES=on, DRAFTER=dflash2 or none, and PARALLEL=auto or above 1.'
+  [[ "$L2PF" =~ ^[01]$ ]] || fail E_CONFIG 'L2PF must be 0 or 1 (TF_GLM_L2PF).'
+  is_number "$LEARN_MIN_FREE_GIB" || fail E_CONFIG 'LEARN_MIN_FREE_GIB must be a number of GiB.'
+  [[ -z "$PROMPT_CACHE_MIN_GIB" ]] || is_number "$PROMPT_CACHE_MIN_GIB" \
+    || fail E_CONFIG 'PROMPT_CACHE_MIN_GIB must be empty (no check) or a number of GiB.'
   [[ "$WITH_VIDEO" =~ ^[01]$ ]] || fail E_CONFIG 'WITH_VIDEO must be 0 or 1.'
   [[ "$CONFIG_OVERLAY" =~ ^(auto|0)$ ]] || fail E_CONFIG 'CONFIG_OVERLAY must be auto or 0.'
   if [[ "${GLM_TP4:-0}" == 1 ]]; then
@@ -102,6 +114,12 @@ validate_config() {
   done
   [[ -z "$TF_ROCE_HCA" || "$TF_ROCE_HCA" =~ ^[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*$ ]] || fail E_CONFIG 'TF_ROCE_HCA must be comma-separated RDMA device names.'
   [[ -z "$NCCL_IB_GID_INDEX" || "$NCCL_IB_GID_INDEX" =~ ^[0-9]+$ ]] || fail E_CONFIG 'NCCL_IB_GID_INDEX must be a number.'
+  # An NCCL exclusion list (^lo,docker,...), often exported for the whole box from /etc/profile.d, names no netdev: the
+  # exported value outranks scripts/local.sh, so it is set aside and the link found as when empty (issue 17).
+  if [[ "$NCCL_SOCKET_IFNAME" == ^* ]]; then
+    warn W_CONFIG "NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME is an NCCL exclusion list, not the link's netdev: finding the link instead (set NCCL_SOCKET_IFNAME=<netdev> to choose one)."
+    NCCL_SOCKET_IFNAME=
+  fi
   [[ -z "$NCCL_SOCKET_IFNAME" || "$NCCL_SOCKET_IFNAME" =~ ^[A-Za-z0-9_.-]+$ ]] || fail E_CONFIG 'NCCL_SOCKET_IFNAME must be a netdev name.'
   [[ "$CONTAINER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || fail E_CONFIG 'CONTAINER_NAME contains unsupported characters.'
   [[ "$CONTAINER_NAME" != tensorfold-zig-r0 && "$CONTAINER_NAME" != tensorfold-zig-r1 && "$CONTAINER_NAME" != dsv41-1017-exl3-tf ]] \
