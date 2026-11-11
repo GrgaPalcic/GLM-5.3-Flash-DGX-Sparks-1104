@@ -1,5 +1,19 @@
 # Changelog
 
+- **2026-11-11** -- Four Sparks (TP=4) join main, with `./start-tp4.sh` (a switch) and `./start-tp4-switchless.sh` (a
+  ring of direct cables), `./stop-tp4.sh`, `scripts/tp4.sh`, the README's "4 Sparks" section with a step-by-step guide,
+  and their measurements under `docs/speed/tp4`. **The engine patches are renumbered for everyone, the pair too:** the
+  four TP=4 patches take 0107-0110 (block FP8 checkpoints, the four-rank RoCE ring all-gather, the DFlash2 drafter MLP
+  split across every rank, `TF_GLM_CHUNK_SOLO`), so main's former 0107-0117 are now 0111-0121 (0107 tool-call guard ->
+  0111, 0108 `CACHE_FIRST` -> 0112, 0109 learned conversations -> 0113, 0110 KV sharding -> 0114, 0111 -> 0115, 0112
+  -> 0116, 0113 `L2PF` -> 0117, 0114 -> 0118, 0115 32-row windows -> 0119, 0116 `EXTRA_EOS` -> 0120, 0117
+  `THINK_OFF_SPLIT` -> 0121); entries below this one use the old numbers. None of the four changes the pair's
+  serving: FP8 reads only a block-FP8 checkpoint, the ring all-gather runs only with `ROCE_RING=on` at four ranks,
+  `TF_GLM_CHUNK_SOLO` is off unless set, and the drafter MLP split at two ranks is the same halves and the same single
+  fp32 add as before (same bits). The rank fingerprint's layout is 17. The pair's next start rebuilds its image (121
+  patches) under a new label. `start.sh` still runs two Sparks; `KV_SHARD=1` stays two-rank only (the TP=4 starts
+  refuse it).
+
 - **2026-11-11** -- Two four-Spark launchers. The ring's is now `./start-tp4-switchless.sh` (renamed from
   `./start-tp4.sh`, otherwise as before); `./start-tp4.sh` is new, for four Sparks on a switch, adapted from the
   earlier Python-engine recipe's switch launcher (MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold, branch tp4):

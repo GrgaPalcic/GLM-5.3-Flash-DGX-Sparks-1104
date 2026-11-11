@@ -381,14 +381,14 @@ either prints the links it finds and every rank's command, and changes nothing.
    container exporting `/huggingface` for `~/.cache/huggingface`), name the exported paths in `NFS_MODEL_PATH` and
    `NFS_DFLASH2_PATH`. `FP8=1` needs about 306 GiB more on rank 0 (see below).
 5. **Write rank 0's `scripts/local.sh`.** The workers (in ring order on a ring), plus the weights; everything else is
-   the pair's settings. This kit's file (a ring):
+   the pair's settings. For a ring (your users, addresses and paths):
    ```sh
-   WORKER=zurih@10.0.22.2       # spark2, cabled to this Spark
-   WORKER2=zurih@10.0.0.3       # spark3, across the ring
-   WORKER3=zurih@10.0.41.4      # spark4, cabled to this Spark
+   WORKER=user@spark2           # cabled to this Spark
+   WORKER2=user@spark3          # across the ring
+   WORKER3=user@spark4          # cabled to this Spark
    WORKER_WEIGHTS=nfs
-   NFS_MODEL_PATH=/huggingface/glm53-1104/model
-   NFS_DFLASH2_PATH=/huggingface/glm53-1104/dflash2
+   NFS_MODEL_PATH=/exported/path/to/model        # only when the NFS export is another view of MODEL_DIR
+   NFS_DFLASH2_PATH=/exported/path/to/dflash2
    PORT=8888
    PARALLEL=8
    CONTEXT=auto
