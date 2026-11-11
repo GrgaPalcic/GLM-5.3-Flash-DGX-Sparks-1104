@@ -1,5 +1,41 @@
 # Changelog
 
+- **2026-11-11** -- engine patch 0115 (32-row decode windows, from upstream #2257) and the pair's measurements of
+  0113-0115. 0115 raises the verify window from 16 to 32 rows, so a context copy verifies up to 31 tokens a round
+  (DFlash2 still drafts 7), with the fixes the wider window exposes here: shared-window scratch is said outright (at
+  32 and 32 the KDA projection buffer would have shrunk to 4 bytes and shared rounds lost 0075/0088's one-launch
+  segment attention), the follower's draws hold 32 rows, and the window width joins the learned-state store's
+  identity. Not taken from upstream: load-timed pricing (0096's GB10 prices stay), 15-deep MTP chains, and #1779's
+  shared draft reservation, which upstream itself turned off for DFlash2 (cc2fa8d23, #2720: a cut chance left a
+  stream at no drafts while its peers decoded). Measured on spark3+4 (`docs/speed/ab-upstream.sh`,
+  `ab-upstream2.sh`; `docs/dec.py` 3 trials, greedy, thinking off; new `docs/speed/copybench.py`, a 1,195-token
+  file returned with one rename), every leg's contract and copy token hashes identical to base:
+
+  | leg | 1 stream | 4 streams | 8 streams | file rewrite, 1 stream | file rewrite, 4 streams |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | base (114 patches, L2PF=0) | 37.6 | 72.7 | 121.1 | | |
+  | L2PF=1 | 38.4 | 73.1 | 121.4 | 151 (14.9 tok/round) | 34.2 a stream (4.0) |
+  | 0115, L2PF=1 | 38.5 | 73.2 | 121.4 | 203 (26.6 tok/round) | 34.4 a stream (4.0) |
+  | 0115, L2PF=0 | 37.5 | 72.8 | 121.6 | 201 (26.6 tok/round) | 34.0 a stream (4.0) |
+
+  Decode tok/s (prompt time removed). 0115: +34% on a one-stream rewrite, no change elsewhere, 34 MiB more fixed
+  memory a stream (451 against 417 MiB). L2PF: +2% at one stream (round 55.1 to 53.9 ms), flat under load; it stays
+  opt-in. Shared rounds take almost no copies (4 tokens a round at four streams, before and after): the next copy gain
+  is there, not in the window width. 0113-0115 build clean on the pair (images 6a5156b33a41 and 1d9dcf33f2e0).
+
+- **2026-11-10** -- engine patches 0113 and 0114, ported from upstream TensorFold main (22fb601) onto `f350cd3e` and
+  this recipe's 0001-0112, with `TF_REF` unchanged. Upstream had 2,662 commits since the pin; a trial rebase of the
+  112 patches onto main conflicted in about 90, so only two GLM wins were picked, after a review that dropped the
+  router-on-shared-mma-tiles refactor (it loses 0083's PDL trigger), `TF_GLM_KV_LIVE_HALF` (unsafe beside 0109's disk
+  images and 0110's KV sharding), the two-heads-a-block prompt attention (not GLM's prompt path) and the bounded peer
+  warm-up (0106 covers it; the port would pull in a long unrelated chain). 0113: `L2PF=1` (`TF_GLM_L2PF`, opt-in)
+  prefetches each decode window's next weights into L2 on a side stream; upstream runs it by default on GB10 at TP>=2,
+  kept off here until it is measured on this stack. 0114: a JSON tool call `max_tokens` cuts after naming an offered
+  tool is returned as the reply's cut call, as XML and GLM calls were, and a whole `/v1/messages` reply closes its
+  input instead of answering 500; two local fixes over upstream (a key with no value no longer indexes an empty
+  slice; the name matches offered tools in any case, as a closed call's does). The 114 patches apply to `f350cd3e` with the Dockerfile's exact
+  `git apply --check && git apply` loop. Built and measured on the pair 2026-11-11 (the entry above).
+
 - **2026-11-09** -- engine patch 0112: rejected tool calls are logged one by one, and `TF_TOOL_CALL_GUARD=1` no longer
   empties replies. A Hermes Agent report (2026-11-06, guard on) showed 25 replies of 436 with calls hidden on requests
   that offered tools, 11 of them left empty, and Hermes retrying each empty reply unchanged until its 39 s timeout;

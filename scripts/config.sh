@@ -196,6 +196,12 @@ LEARN_MIN_FREE_GIB="${LEARN_MIN_FREE_GIB:-15}"
 # (1-4% decode). Needs KV=fp8, KV pages, DFlash2 or no drafter, PARALLEL above 1. The pool then takes most of the
 # room: pair it with CACHE_FIRST=1 PROMPT_CACHE_GIB so long conversations stay kept. 0 (default): off, as before.
 KV_SHARD="${KV_SHARD:-0}"
+# L2PF=1 (engine patch 0113, TF_GLM_L2PF, ported from upstream): each decode window reads the next layer's mixer
+# weights, this layer's router and KDA's o_proj into L2 on a side stream while the gathers and chains run (not the
+# EXL3 routed experts). Upstream turns it on by default on GB10 at TP>=2; on this pair (2026-11-11) it gave +2% at one
+# stream and nothing measurable at four or eight, token hashes identical. Both ranks must agree (the fingerprint
+# carries it). 0 (default): off, as before.
+L2PF="${L2PF:-0}"
 VISION="${VISION:-1}"                            # --vision: images (rank 0's tower)
 VISION_MAX_IMAGES="${VISION_MAX_IMAGES:-50}"     # --vision-max-images: images per request (engine default 4, at most 64)
 # --chat-template: auto = with VISION=1, templates/glm-5.3-flash-vision.jinja (the checkpoint's own template, whose media
