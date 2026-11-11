@@ -19,7 +19,7 @@
 
 **Engine: TensorFold 1.1.9** (`tensorfold-native --version`), upstream commit
 [`f350cd3e`](https://github.com/ashhart/TensorFold/commit/f350cd3ea253a042e205746928271f9d8f71a82d) plus this recipe's
-131 engine patches (`patches/engine/`).
+136 engine patches (`patches/engine/`).
 
 This recipe serves GLM-5.3-Flash from an EXL3 checkpoint on **two NVIDIA DGX Sparks** (GB10, 128 GB unified memory
 each) at tensor parallel 2, one rank on each Spark, over their ConnectX-7 link. It uses TensorFold's native Zig/CUDA
@@ -49,7 +49,7 @@ The engine is TensorFold 1.1.9 at commit `f350cd3e` ([ashhart/TensorFold](https:
 
 ## What is checked
 
-131 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
+136 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
 reaches the worker by content; link discovery finds both PCIe twins of the cabled port and the RoCE v2 GID that
 holds each port's own IPv4; NCCL and the engine's RDMA all-gather run over the cable; the full 1,048,576-token window
 serves 8 streams beside a 3.6 GiB prompt cache; greedy replies are byte-stable across every change
@@ -178,6 +178,42 @@ Layered: `scripts/config.sh` defaults, then `.env`, then `scripts/local.sh` (tru
 variables. **The served pair's `local.sh`** sets `PORT=8888`, `PARALLEL=8`, `CONTEXT=auto`, `KV=fp8`, `DENSE=q8`,
 `HEAD=q8`, `ABSORB_MMA=1`, `HOST_CACHE_GIB=0`, `MODEL_SOURCE=local`, `WORKER_WEIGHTS=check`, and the reserve at the
 default 6.5.
+
+### Recommended settings for shared KV pages and the SSD tier (two Sparks)
+
+Engine patches 0122-0136 are all off by default; the settings that turn them on, as served on a pair of DGX Sparks,
+are in [`scripts/local.sh.kv-share.example`](scripts/local.sh.kv-share.example):
+
+```bash
+cp scripts/local.sh.kv-share.example scripts/local.sh    # set WORKER, HOST and, if the weights are already there, the paths
+./start.sh
+```
+
+| Setting | Value | What it buys |
+| --- | --- | --- |
+| `export TF_KV_SHARE=32` | on | Kept sessions are the pool's own pages by reference: no second copy of their rows |
+| `KV_SHARD=1`, `CACHE_FIRST=1`, `PROMPT_CACHE_GIB=7` | | The sharded pool, and 24 kept sessions' slots (6.8 GiB, about 290 MiB each at 32-row windows) set aside first; the engine's startup line puts all 32 at `10` |
+| `MEMORY_RESERVE_GIB=5` | default 6.5 | 8,704 pool pages (4.46M tokens) measured at 5 |
+| `LEARN_GIB=200` | | Kept sessions also on NVMe: a session evicted from memory, or a restarted lane, resumes from disk |
+| `SERVE_EXTRA_ARGS='--top-k 20 --learn-daily-gib 200'` | | The engine's 32 GiB daily write budget runs out in a night; each kept turn writes about 389 MiB |
+
+Measured with these settings (two Sparks, `PARALLEL=8 CONTEXT=1048576 KV=fp8`, 0122-0140, 2026-11-11): cold/warm
+time to first token 4.36 / 1.40 s at 4,110 tokens, 75.0 / 4.52 s at 126,407 and 401.0 / 6.21 s at 610,128, replies
+equal at concurrency 1 and 8, drafted and plain; a 333,161-token conversation's next turn 1.44 s after a 207 s cold
+first turn. From disk (same run): a 610k-token session's next turn in 8.2 s after eviction and 10.5 s after
+a lane restart (time to first token), with the cold reply's sha256.
+
+After the first start, check before trusting those numbers on your pair:
+
+```bash
+docker logs glm53-spark 2>&1 | grep -E "pages of 512|kept states|conversation states on disk"   # pages, the reserve, kept-state slots
+awk '/MemAvailable/{printf "%.1f GiB\n", $2/1048576}' /proc/meminfo                         # on both Sparks, under load: stay above 3 GiB
+```
+
+Know before you rely on it: every engine rebuild opens a new, empty disk store (its directory is named by a hash that
+includes the compiled kernels) and leaves the old one under `CACHE_DIR/learn` for you to delete; a resumed turn
+prefills its new tokens at about 75 % of the cold rate, so a kept prefix is used only when the new part is at most
+three times its length; `TF_GLM_KV_LIVE_HALF=1` is refused beside `LEARN_GIB`.
 
 ### The pair
 
@@ -314,9 +350,9 @@ and MMLU 88.4%, thinking-on categories unchanged.
 
 ## Engine patches
 
-`patches/engine/` holds 131 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
+`patches/engine/` holds 136 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
 the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-6000-TensorFold)'s, unchanged;
-0094-0106 and 0111-0131 are this pair's own or ported from that recipe or from upstream. 0107-0110 are the four-Spark patches. None is GB10-specific: the arch-gated kernels test
+0094-0106 and 0111-0136 are this pair's own or ported from that recipe or from upstream. 0107-0110 are the four-Spark patches. None is GB10-specific: the arch-gated kernels test
 `__CUDA_ARCH__ >= 1200`, which `sm_121` satisfies.
 
 | Patches | What they do |
@@ -355,6 +391,11 @@ the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-
 | 0129 | `TF_KV_SHARE` beside `KV_SHARD=1`: the store takes the pool's parts as its pages, reclaim runs per part, a resume opens in its adopted pages' part, a kept state's slot leaves the latent rows on the pages. |
 | 0130 | A sharded share resume takes no twin (about 75 % of the twinned prefill rate), so a kept prefix is adopted only when it pays: `TF_GLM_KV_SHARE_UNTWINNED_PCT` (75), counter `kv_shard_resumes_skipped_total`. |
 | 0131 | `TF_KV_SHARE` is read with the rank settings and carried in the rank fingerprint (layout 19): ranks that keep prompts differently stop at startup naming it. `TF_GLM_KV_LIVE_HALF=1` beside `--learn-conversations` (`LEARN_GIB`) is refused at open, as upstream does (f34b97085): neither disk identity carries the flag. |
+| 0132 | `LEARN_GIB` beside `TF_KV_SHARE`, unsharded: a pages layout in the disk image, write-behind in pieces under the permit, recall into pool pages. The share store's identity carries the window width (0119's `window_rows`), as the copy store's does. |
+| 0133 | A sharded kept state's pages stay in one part (`kv_shard_keeps_refused_total`); the shared store's disk glue (a `share` step for the identity probe, the store's family carries the disk image, idle turns drive the writer, a save carries the whole path's pages). |
+| 0134 | `LEARN_GIB` beside `TF_KV_SHARE` and `KV_SHARD=1`: the sharded writer, recall into one part, per-rank disk ops. |
+| 0135 | A cold pass seats in the part that holds its prefix, and a keep that would span the parts evicts the other part's idle branches instead of being refused. Before, a conversation seated away from its kept prefix had every keep refused and ran cold every turn (a 335K-token conversation on a pair running this stack, about 207 s a turn, 2026-11-11); measured after, its next turn resumes in 1.4 s. |
+| 0136 | A disk recall's home is the part that holds its prefix in the tree; a kept state whose home is not its adopted pages' part is not resumed (the pass runs cold), and a carry for a state with shared pages is refused on every rank before any NCCL call. Before, the two ranks could deadlock in a resume's carry (a pair running this stack hung 7 h, 2026-11-11). |
 
 Every default-on patch was A/B tested against the image before it: greedy replies identical plus a measured gain.
 

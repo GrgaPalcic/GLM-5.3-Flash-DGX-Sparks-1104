@@ -1,5 +1,20 @@
 # Changelog
 
+- **2026-11-11** -- engine patches 0132-0136: `LEARN_GIB` beside `TF_KV_SHARE`, unsharded and with `KV_SHARD`, and
+  two fixes for defects seen on a second two-Spark pair running this stack (2026-11-11). The disk tier (`LEARN_GIB`, 0113) works under the shared pages: states are written
+  from the pool's pages in pieces under the staging permit and recalled into pool pages, per rank when sharded; the
+  share store's identity carries the window width (0119's `window_rows`). 0135: a cold pass seats in the part that
+  holds its prefix, and a keep that would span the parts evicts the other part's idle branches. Before, a
+  conversation seated away from its kept prefix had every keep refused and ran cold every turn (about 207 s a turn
+  at 335K tokens, on that pair); measured on ours with 0122-0140 (2026-11-11): a 333,161-token conversation 207.3 s cold, then 1.35 s with
+  `cached 331776` and the same sha256, its next turn 1.44 s, no keep refused. 0136: a disk recall's home is the part
+  that holds its prefix in the tree, and a kept state whose home is not its pages' part is not resumed. Before, a
+  recall filed in the part with fewer live streams while its resume adopted pages in the other part; the two ranks
+  deadlocked in the resume's carry and that pair hung (7 h); measured on ours with 0122-0140: a 206,708-token
+  conversation recalled after a restart beside a resumed branch, `cached 204800` in 6.35 s, no carry. From disk
+  (same run): a 610,124-token conversation `cached 606208` in 10.5 s after a restart and in 8.23 s after eviction. Recommended settings for two Sparks:
+  `scripts/local.sh.kv-share.example` and the README section.
+
 - **2026-11-11** -- engine patches 0122-0131: `TF_KV_SHARE`, kept prompt states as the pool's own pages (no second
   copy), beside `KV_SHARD`. Under `TF_KV_SHARE=n` kept prompt states are the pool's pages by reference (ports of
   upstream's share work onto f350cd3e + 0001-0121, plus what the sharded pool needed). `TF_KV_SHARE` is read with the
