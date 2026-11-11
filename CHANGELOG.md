@@ -2,7 +2,9 @@
 
 - **2026-11-11** -- Four Sparks with EXL3 take the same defaults, `MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1`, with
   `PROMPT_CACHE_GIB=8`: at 12 they already held all eight 1M windows (16,392 pages) and a 3.6 GiB prompt cache, and the
-  5.5 GiB the lower reserve frees goes to the cache. Not yet measured. The pair keeps 12 and no cache-first.
+  5.5 GiB the lower reserve frees goes to the cache: measured on the ring, the same 16,392 pages (8.39M tokens) and an
+  8.0 GiB prompt cache a rank, 7.4-10.4 GiB still available on each Spark. The pair keeps 12 and no cache-first.
+  README: a memory table for both weights under "4 Sparks".
 
 - **2026-11-11** -- Four Sparks with `FP8=1` default to `MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1 PROMPT_CACHE_GIB=4`
   (`scripts/config.sh`; EXL3 and the pair keep 12 and no cache-first). At the earlier 9.5 the FP8 start's KV pages left

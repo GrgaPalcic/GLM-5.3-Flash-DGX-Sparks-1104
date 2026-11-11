@@ -211,7 +211,7 @@ HEAD="${HEAD:-bf16}"                             # TF_GLM_HEAD_BITS for the LM h
 # FP8, measured 2026-11-11 on the ring: 6,147 pages (3.15M tokens, three 1M windows) and a 3.9 GiB prompt cache a
 # rank, 7.6-10.5 GiB still available on each Spark; at 9.5 the same start funded no prompt cache (0.08 GiB left after
 # the pages). EXL3 (~46 GiB a rank) already held all eight 1M windows (16,392 pages) and a 3.6 GiB cache at 12; the
-# 5.5 GiB the lower reserve frees goes to the cache (estimated, not yet measured: about 8 GiB beside the same pages).
+# 5.5 GiB the lower reserve frees goes to the cache (measured: an 8.0 GiB cache beside the same pages).
 if [[ "${GLM_TP4:-0}" == 1 ]]; then
   MEMORY_RESERVE_GIB="${MEMORY_RESERVE_GIB:-6.5}"
   if [[ "$FP8" == 1 ]]; then PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-4}"; else PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-8}"; fi
