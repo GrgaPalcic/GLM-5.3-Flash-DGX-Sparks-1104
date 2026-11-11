@@ -1,5 +1,17 @@
 # Changelog
 
+- **2026-11-11** -- engine patches 0137-0139: a failed disk recall under `TF_KV_SHARE` costs a cold prefill, not the
+  lane; a fault drill; a follower's failure after its seal reaches rank 0. Before, a disk op failing on rank 1 inside
+  a recall ended both ranks (`rank 1 stopped (SnapshotSize); this rank stops too`); now the recall is given up and the
+  request prefills cold. `TF_GLM_DISK_FAULT=n` (off by default) fails the nth disk write a rank other than 0 takes.
+  0139: a `settle` step ends each recall, so a write that fails on a follower after its seal answered (the state's
+  own file follows the seal) also gives the recall up instead of leaving that rank's copy dropped. The
+  follower side of 0137 and the settle also serve `LEARN_GIB` without `TF_KV_SHARE`. Drill on two DGX
+  Sparks with 0122-0140 (2026-11-11, `TF_GLM_DISK_FAULT=40`): rank 1 logged `a disk step for state 2 failed
+  (DiskFaultDrill)` and stayed up, rank 0 logged `recalling 606208 tokens from disk failed (DiskRankFailed); the pass
+  prefills from the start`, and the next recall returned a 126k conversation with its reference sha256; the same
+  with `TF_KV_SHARE` unset.
+
 - **2026-11-11** -- engine patches 0132-0136: `LEARN_GIB` beside `TF_KV_SHARE`, unsharded and with `KV_SHARD`, and
   two fixes for defects seen on a second two-Spark pair running this stack (2026-11-11). The disk tier (`LEARN_GIB`, 0113) works under the shared pages: states are written
   from the pool's pages in pieces under the staging permit and recalled into pool pages, per rank when sharded; the

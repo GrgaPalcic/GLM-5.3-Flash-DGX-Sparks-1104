@@ -19,7 +19,7 @@
 
 **Engine: TensorFold 1.1.9** (`tensorfold-native --version`), upstream commit
 [`f350cd3e`](https://github.com/ashhart/TensorFold/commit/f350cd3ea253a042e205746928271f9d8f71a82d) plus this recipe's
-136 engine patches (`patches/engine/`).
+139 engine patches (`patches/engine/`).
 
 This recipe serves GLM-5.3-Flash from an EXL3 checkpoint on **two NVIDIA DGX Sparks** (GB10, 128 GB unified memory
 each) at tensor parallel 2, one rank on each Spark, over their ConnectX-7 link. It uses TensorFold's native Zig/CUDA
@@ -49,7 +49,7 @@ The engine is TensorFold 1.1.9 at commit `f350cd3e` ([ashhart/TensorFold](https:
 
 ## What is checked
 
-136 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
+139 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
 reaches the worker by content; link discovery finds both PCIe twins of the cabled port and the RoCE v2 GID that
 holds each port's own IPv4; NCCL and the engine's RDMA all-gather run over the cable; the full 1,048,576-token window
 serves 8 streams beside a 3.6 GiB prompt cache; greedy replies are byte-stable across every change
@@ -350,9 +350,9 @@ and MMLU 88.4%, thinking-on categories unchanged.
 
 ## Engine patches
 
-`patches/engine/` holds 136 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
+`patches/engine/` holds 139 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
 the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-6000-TensorFold)'s, unchanged;
-0094-0106 and 0111-0136 are this pair's own or ported from that recipe or from upstream. 0107-0110 are the four-Spark patches. None is GB10-specific: the arch-gated kernels test
+0094-0106 and 0111-0139 are this pair's own or ported from that recipe or from upstream. 0107-0110 are the four-Spark patches. None is GB10-specific: the arch-gated kernels test
 `__CUDA_ARCH__ >= 1200`, which `sm_121` satisfies.
 
 | Patches | What they do |
@@ -396,6 +396,9 @@ the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-
 | 0134 | `LEARN_GIB` beside `TF_KV_SHARE` and `KV_SHARD=1`: the sharded writer, recall into one part, per-rank disk ops. |
 | 0135 | A cold pass seats in the part that holds its prefix, and a keep that would span the parts evicts the other part's idle branches instead of being refused. Before, a conversation seated away from its kept prefix had every keep refused and ran cold every turn (a 335K-token conversation on a pair running this stack, about 207 s a turn, 2026-11-11); measured after, its next turn resumes in 1.4 s. |
 | 0136 | A disk recall's home is the part that holds its prefix in the tree; a kept state whose home is not its adopted pages' part is not resumed (the pass runs cold), and a carry for a state with shared pages is refused on every rank before any NCCL call. Before, the two ranks could deadlock in a resume's carry (a pair running this stack hung 7 h, 2026-11-11). |
+| 0137 | A failed disk recall under `TF_KV_SHARE` costs a cold prefill, not the lane: rank 0 gives the pages back and marks the state unreadable (`disk_recalls_failed`); a rank other than 0 poisons the state and answers with a status word instead of leaving its step loop. |
+| 0138 | `TF_GLM_DISK_FAULT=n` (off by default): a fault drill, the nth disk write a rank other than 0 takes fails once. |
+| 0139 | A follower's disk failure after its seal reaches rank 0: a `settle` step ends each recall, every rank answers its status once more, and a failure gives the recall up for a cold pass. One status word from each other rank a recall; it also runs for `LEARN_GIB` without `TF_KV_SHARE`. |
 
 Every default-on patch was A/B tested against the image before it: greedy replies identical plus a measured gain.
 
