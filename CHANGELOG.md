@@ -1,5 +1,11 @@
 # Changelog
 
+- **2026-11-11** -- engine patch 0140: `tools/share_gate.py`, the served exactness gate for kept-state changes. The
+  tool the 0122-0139 measurements were taken with: against a serving lane it checks resumed = fresh at calibrated
+  prompt sizes, concurrent = alone at each level, drafted = plain, with a per-run nonce so a cold run is cold. A
+  concurrent request that errored fails the gate with its error in the report; the API key is read from an
+  environment variable (`--api-key-env NAME`), never from the command line.
+
 - **2026-11-11** -- engine patches 0137-0139: a failed disk recall under `TF_KV_SHARE` costs a cold prefill, not the
   lane; a fault drill; a follower's failure after its seal reaches rank 0. Before, a disk op failing on rank 1 inside
   a recall ended both ranks (`rank 1 stopped (SnapshotSize); this rank stops too`); now the recall is given up and the
