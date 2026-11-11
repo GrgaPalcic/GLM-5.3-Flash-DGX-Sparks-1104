@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the four ranks of ./start-tp4.sh, save one gzipped archive with their logs and keep the newest LOG_KEEP (10).
+# Stop the four ranks of ./start-tp4.sh or ./start-tp4-switchless.sh, save one gzipped archive with their logs and keep the newest LOG_KEEP (10).
 # Rank 0 goes first: it drains its requests and ends the followers' steps; then ranks 1, 2 and 3 on the workers.
 # A rank that still runs after the STOP_TIMEOUT stop gets docker kill; one still running after the kill fails the
 # stop, so a start aborts for a human instead of layering a second container onto a wedged one.

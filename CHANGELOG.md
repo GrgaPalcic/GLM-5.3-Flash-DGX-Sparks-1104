@@ -1,5 +1,14 @@
 # Changelog
 
+- **2026-11-11** -- Two four-Spark launchers. The ring's is now `./start-tp4-switchless.sh` (renamed from
+  `./start-tp4.sh`, otherwise as before); `./start-tp4.sh` is new, for four Sparks on a switch, adapted from the
+  earlier Python-engine recipe's switch launcher (MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold, branch tp4):
+  it runs the same script with `FABRIC_EXPECT=mesh`. On a switch `scripts/tp4.sh` requires every pair of Sparks to
+  share a RoCE subnet, takes the workers in any order, writes no ring graphs and gives NCCL its own algorithms and
+  devices (no `NCCL_ALGO=Ring`, no subnet-aware routing or prefix), and refuses `ROCE_RING=on` (the ring's relay;
+  this engine has no other four-rank RoCE path). Each launcher stops on the other's cabling and names it. README:
+  the "4 Sparks" section and its guide cover both. The switch launcher is not run yet.
+
 - **2026-11-11** -- tp4-local takes main up to 74cf93c (the entries below, in main's numbering) on its own stack. Main's
   0107 and 0108 are this stack's 0111 and 0112, as before; main's 0109-0117 are this stack's 0113-0121, each regenerated
   against 0001-0112 here (3-way; conflicts only where they meet 0110's CHUNK_SOLO and 0108's ring kernels). The rank

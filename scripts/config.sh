@@ -76,11 +76,12 @@ SERVED_NAME="${SERVED_NAME:-GLM-5.3-Flash}"
 ROCE="${ROCE:-on}"
 ROCE_MAX_KB="${ROCE_MAX_KB:-4096}"               # TF_ROCE_MAX_KB, the largest shard the RDMA region holds
 
-# --- four Sparks (./start-tp4.sh, ./stop-tp4.sh; README "4 Sparks") -----------------------------------------------------
-# TP=4 over four Sparks cabled as a ring without a switch: this Spark (rank 0, the API) and WORKER, WORKER2, WORKER3
-# (ranks 1-3) in the ring's order, each cabled to the next and the last back to this one, one subnet per cable. The two
-# Sparks across the ring from each other reach each other only through a neighbour (an address routed over the cables,
-# or the LAN). start.sh never reads these; start-tp4.sh sets TP=4 itself.
+# --- four Sparks (./start-tp4.sh, ./start-tp4-switchless.sh, ./stop-tp4.sh; README "4 Sparks") ----------------------
+# TP=4 over four Sparks: this Spark (rank 0, the API) and WORKER, WORKER2, WORKER3 (ranks 1-3). On a switch
+# (./start-tp4.sh) every Spark's ports share the switch's subnet and the workers may be in any order. Cabled as a ring
+# without a switch (./start-tp4-switchless.sh) they go in the ring's order, each cabled to the next and the last back to
+# this one, one subnet per cable; the two Sparks across the ring from each other reach each other only through a
+# neighbour (an address routed over the cables, or the LAN). start.sh never reads these; the TP=4 starts set TP=4.
 WORKER2="${WORKER2:-}"                           # rank 2's ssh target, the Spark across the ring (e.g. zurih@10.0.0.3)
 WORKER3="${WORKER3:-}"                           # rank 3's ssh target, cabled to this Spark (e.g. zurih@10.0.41.4)
 # NCCL_COMM_ID's address at TP=4 and the ranks' lines to rank 0: an address of this Spark every worker reaches (auto:
@@ -133,7 +134,7 @@ ABLIT_ID="Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit"
 _id="Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold"; _dir=model
 if [[ "$ABLIT" == 1 ]]; then _id=$ABLIT_ID; _dir=model-ablit; fi
 # FP8=1 serves Z.AI's own release, zai-org/GLM-5.3-Flash, which is published in block FP8 (e4m3 codes, 128 x 128 scales;
-# ~306 GiB, engine patch 0107; README "Block FP8 weights"). It fits four Sparks only (./start-tp4.sh): ~81 GiB of
+# ~306 GiB, engine patch 0107; README "Block FP8 weights"). It fits four Sparks only (./start-tp4.sh, ./start-tp4-switchless.sh): ~81 GiB of
 # weights a rank. unsloth/GLM-5.3-Flash-FP8 is a byte-identical mirror of it (every shard's sha256 the same).
 FP8="${FP8:-0}"
 FP8_ID="zai-org/GLM-5.3-Flash"

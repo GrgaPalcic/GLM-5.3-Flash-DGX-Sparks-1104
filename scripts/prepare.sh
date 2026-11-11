@@ -88,9 +88,9 @@ validate_config() {
   [[ "$WITH_VIDEO" =~ ^[01]$ ]] || fail E_CONFIG 'WITH_VIDEO must be 0 or 1.'
   [[ "$CONFIG_OVERLAY" =~ ^(auto|0)$ ]] || fail E_CONFIG 'CONFIG_OVERLAY must be auto or 0.'
   if [[ "${GLM_TP4:-0}" == 1 ]]; then
-    [[ "$TP" == 4 ]] || fail E_CONFIG "TP=$TP: ./start-tp4.sh runs four Sparks (TP=4); ./start.sh runs two."
+    [[ "$TP" == 4 ]] || fail E_CONFIG "TP=$TP: ./start-tp4.sh (a switch) and ./start-tp4-switchless.sh (a ring) run four Sparks (TP=4); ./start.sh runs two."
     for key in WORKER WORKER2 WORKER3; do
-      [[ -n "${!key}" ]] || fail E_CONFIG "$key is empty: set WORKER, WORKER2 and WORKER3 to the other three Sparks' ssh targets, in the ring's order from this Spark, in scripts/local.sh."
+      [[ -n "${!key}" ]] || fail E_CONFIG "$key is empty: set WORKER, WORKER2 and WORKER3 to the other three Sparks' ssh targets (on a ring, in its order from this Spark) in scripts/local.sh."
       [[ "${!key}" =~ ^[A-Za-z0-9_.@:-]+$ ]] || fail E_CONFIG "$key must be an ssh target such as user@host, with no spaces."
     done
     [[ "$WORKER" != "$WORKER2" && "$WORKER" != "$WORKER3" && "$WORKER2" != "$WORKER3" ]] || fail E_CONFIG 'WORKER, WORKER2 and WORKER3 must name three different Sparks.'
@@ -105,7 +105,7 @@ validate_config() {
     done
     [[ "$WORKER_WEIGHTS" =~ ^(nfs|check)$ ]] || fail E_CONFIG 'WORKER_WEIGHTS must be nfs or check at four Sparks (rsync is not offered there).'
   else
-    [[ "$TP" == 2 ]] || fail E_CONFIG "TP=$TP: ./start.sh wires two Sparks; four cabled as a ring start with ./start-tp4.sh (README \"4 Sparks\")."
+    [[ "$TP" == 2 ]] || fail E_CONFIG "TP=$TP: ./start.sh wires two Sparks; four start with ./start-tp4.sh on a switch or ./start-tp4-switchless.sh on a ring (README \"4 Sparks\")."
     [[ -n "$WORKER" ]] || fail E_CONFIG 'WORKER is empty: set it to the second Spark'"'"'s ssh target (e.g. WORKER=zurih@10.0.34.4) in scripts/local.sh.'
     [[ "$WORKER" =~ ^[A-Za-z0-9_.@:-]+$ ]] || fail E_CONFIG 'WORKER must be an ssh target such as user@host, with no spaces.'
   fi
@@ -136,7 +136,7 @@ validate_config() {
   [[ "$ABLIT" =~ ^[01]$ ]] || fail E_CONFIG 'ABLIT must be 0 or 1.'
   [[ "$FP8" =~ ^[01]$ ]] || fail E_CONFIG 'FP8 must be 0 or 1.'
   [[ "$FP8" == 0 || "$ABLIT" == 0 ]] || fail E_CONFIG 'FP8=1 and ABLIT=1 name two checkpoints: set one.'
-  [[ "$FP8" == 0 || "${GLM_TP4:-0}" == 1 ]] || fail E_CONFIG 'FP8=1 (the ~306 GiB block FP8 release) fits four Sparks only: use ./start-tp4.sh.'
+  [[ "$FP8" == 0 || "${GLM_TP4:-0}" == 1 ]] || fail E_CONFIG 'FP8=1 (the ~306 GiB block FP8 release) fits four Sparks only: use ./start-tp4.sh (a switch) or ./start-tp4-switchless.sh (a ring).'
   [[ "$ABLIT" == 0 || "$MODEL_SOURCE" == download ]] || fail E_CONFIG 'ABLIT=1 fetches the Ablit weights, so it needs MODEL_SOURCE=download. To serve a copy you already have, set ABLIT=0, MODEL_SOURCE=local and MODEL_DIR.'
   [[ "$MODEL_SOURCE" != download || -n "$MODEL_REVISION" ]] || fail E_CONFIG "MODEL_ID=$MODEL_ID has no pinned revision: set MODEL_REVISION."
   # A download never overwrites another checkpoint or revision: their files share names, so the result would be a mix.

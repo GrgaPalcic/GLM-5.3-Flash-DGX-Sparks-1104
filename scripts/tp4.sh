@@ -1,5 +1,6 @@
-# Four Sparks cabled as a ring, TP=4 (./start-tp4.sh and ./stop-tp4.sh): reaching the three workers, finding the ring
-# and the RDMA devices each hop runs on, NCCL's ring graphs, and the image and the weights on every Spark.
+# Four Sparks at TP=4 (./start-tp4-switchless.sh on a ring of cables, ./start-tp4.sh on a switch, ./stop-tp4.sh for
+# both): reaching the three workers, finding the links and the RDMA devices each runs on (on a ring, NCCL's ring graphs
+# too), and the image and the weights on every Spark. FABRIC_EXPECT (ring or mesh) is set by the start script.
 # Sourced after scripts/prepare.sh (its helpers, config.sh, nodes.sh); start.sh and stop.sh never read it.
 #
 # The ring discovery (node_inventory, pair_links), the per-rank NCCL graph files (ring_graphs, graph_xml) and the NCCL
@@ -254,11 +255,21 @@ detect_ring() {
     esac
   done <<<"$pairs"
   ring=$(xargs <<<"$ring")
-  [[ -n "$missing" ]] || fail E_FABRIC 'Every pair of these four Sparks shares a RoCE subnet (a switch). This launcher is written for a ring of direct cables, one subnet per cable (README "4 Sparks").'
-  [[ -n "$ring" ]] || fail E_FABRIC "The four Sparks' links do not form one ring (no common subnet between ranks$missing): cable each Spark to two others, one subnet per cable, and give both ends addresses on it."
-  if [[ "$ring" != '0 1 2 3' ]]; then
-    for k in $(cut -d' ' -f2- <<<"$ring"); do order+=", $(whost "$k")"; done
-    fail E_FABRIC "The Sparks are cabled as a ring, but WORKER, WORKER2 and WORKER3 are not in its order (from this Spark$order, and back): set them in that order in scripts/local.sh."
+  if [[ "${FABRIC_EXPECT:-ring}" == mesh ]]; then
+    # a switch: every pair of Sparks on one RoCE subnet, so NCCL reaches every rank directly, in any order
+    if [[ -n "$missing" && -n "$ring" ]]; then
+      fail E_FABRIC "These four Sparks are cabled as a ring without a switch (no RoCE subnet between ranks$missing): use ./start-tp4-switchless.sh."
+    fi
+    [[ -z "$missing" ]] || fail E_FABRIC "Some of these four Sparks share no RoCE subnet (ranks$missing): on a switch every Spark's ConnectX-7 ports need an address on the switch's subnet (ip -4 addr)."
+  else
+    [[ -n "$missing" ]] || fail E_FABRIC 'Every pair of these four Sparks shares a RoCE subnet (a switch), not a ring: use ./start-tp4.sh.'
+  fi
+  if [[ "${FABRIC_EXPECT:-ring}" == ring ]]; then
+    [[ -n "$ring" ]] || fail E_FABRIC "The four Sparks' links do not form one ring (no common subnet between ranks$missing): cable each Spark to two others, one subnet per cable, and give both ends addresses on it."
+    if [[ "$ring" != '0 1 2 3' ]]; then
+      for k in $(cut -d' ' -f2- <<<"$ring"); do order+=", $(whost "$k")"; done
+      fail E_FABRIC "The Sparks are cabled as a ring, but WORKER, WORKER2 and WORKER3 are not in its order (from this Spark$order, and back): set them in that order in scripts/local.sh."
+    fi
   fi
   for i in $(worker_ids); do
     peer=${LINK_WORKER_ADDR[i]:-}
@@ -280,6 +291,11 @@ detect_ring() {
     [[ -n "${NODE_HCAS[r]:-}" && "${NODE_HCAS[r]}" != - ]] \
       || fail E_FABRIC "rank $r shares no RoCE subnet with any other rank: check the ConnectX-7 cabling and addresses (ip -4 addr)."
   done
+  if [[ "${FABRIC_EXPECT:-ring}" == mesh ]]; then
+    log "[I_FABRIC] A switch: every pair of the four Sparks shares a RoCE subnet; RoCE v2 GID index ${NODE_GID[0]:-per device}/${NODE_GID[1]:-per device}/${NODE_GID[2]:-per device}/${NODE_GID[3]:-per device}."
+    for r in 0 1 2 3; do log "[I_FABRIC] rank $r: NCCL on ${NODE_HCAS[r]} (bootstrap ${NODE_DEV[r]})."; done
+    return 0
+  fi
   log "[I_FABRIC] A ring: this Spark -> $(whost 1) -> $(whost 2) -> $(whost 3) -> back here; RoCE v2 GID index ${NODE_GID[0]:-per device}/${NODE_GID[1]:-per device}/${NODE_GID[2]:-per device}/${NODE_GID[3]:-per device}; subnet prefix ${RING_PREFIX:-of the links}."
   for r in 0 1 2 3; do
     a=$(( (r + 1) % 4 )); b=$(( (r + 3) % 4 ))
@@ -352,6 +368,15 @@ tp4_rank_env() {
   RANK_ENV=(-e "TF_GLM_RANK=$r" -e "NCCL_IB_HCA=${NODE_HCAS[r]}")
   (( r != 0 )) || RANK_ENV+=(-e "NCCL_SOCKET_IFNAME=${NODE_DEV[r]}")
   [[ -z "${NODE_GID[r]}" ]] || RANK_ENV+=(-e "NCCL_IB_GID_INDEX=${NODE_GID[r]}")
+  if [[ "${FABRIC_EXPECT:-ring}" == mesh ]]; then
+    # a switch: NCCL's own algorithms and device choice over every RoCE device the rank has on the switch's subnet; one
+    # GPU a node, so no P2P or SHM transport. NCCL_RUNTIME_CONNECT=1 as on the ring (channels made at first use), with
+    # the cuMem setting it needs; not measured on a switch with this engine.
+    RANK_ENV+=(-e NCCL_P2P_DISABLE=1 -e NCCL_SHM_DISABLE=1 -e NCCL_RUNTIME_CONNECT=1 -e NCCL_CUMEM_ENABLE=1 -e NCCL_CUMEM_HOST_ENABLE=0
+               -e "NCCL_MIN_NCHANNELS=$NCCL_CHANNELS" -e "NCCL_MAX_NCHANNELS=$NCCL_CHANNELS")
+    RANK_MOUNTS=()
+    return 0
+  fi
   RANK_ENV+=(-e "NCCL_ALGO=$RING_NCCL_ALGO" -e NCCL_GRAPH_FILE=/nccl-graph.xml -e NCCL_CROSS_NIC=1 -e NCCL_IB_SUBNET_AWARE_ROUTING=1
              -e NCCL_P2P_DISABLE=1 -e NCCL_SHM_DISABLE=1 -e NCCL_IB_MERGE_NICS=0
              -e NCCL_RUNTIME_CONNECT=1 -e NCCL_CUMEM_ENABLE=1 -e NCCL_CUMEM_HOST_ENABLE=0

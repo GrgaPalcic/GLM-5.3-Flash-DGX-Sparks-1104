@@ -342,22 +342,34 @@ the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-
 
 Every default-on patch was A/B tested against the image before it: greedy replies identical plus a measured gain.
 
-## 4 Sparks (TP=4 on a ring, experimental)
+## 4 Sparks (TP=4, experimental)
 
-`./start-tp4.sh` runs the same image and settings as tensor parallel over four Sparks cabled to each other without a
-switch: each Spark's two ConnectX-7 ports to its two neighbours, one subnet per cable (a port and its PCIe twin on it),
-the two Sparks across the ring from each other reachable only through a neighbour (an address routed over the cables,
-or the LAN). Rank 0 is this Spark (the API); `WORKER`, `WORKER2` and `WORKER3` are the other three **in the ring's
-order** from here (`WORKER` and `WORKER3` cabled to this Spark, `WORKER2` across). `./stop-tp4.sh` stops the four.
-`DRY_RUN=1 ./start-tp4.sh` prints the ring it finds and every rank's command, and changes nothing.
+Two launchers run the same image and settings as tensor parallel over four Sparks; each checks the cabling and stops
+on the other's, naming the script that fits:
+
+- **`./start-tp4-switchless.sh`: four Sparks cabled to each other without a switch** (the one run on this kit). Each
+  Spark's two ConnectX-7 ports go to its two neighbours, one subnet per cable (a port and its PCIe twin on it); the
+  two Sparks across the ring from each other are reachable only through a neighbour (an address routed over the
+  cables, or the LAN). `WORKER`, `WORKER2` and `WORKER3` are the other three **in the ring's order** from rank 0
+  (`WORKER` and `WORKER3` cabled to it, `WORKER2` across).
+- **`./start-tp4.sh`: four Sparks on a switch** (written from the earlier Python-engine recipe's switch launcher, not
+  yet run on a switch with this engine). Every Spark's ports share the switch's subnet, so the workers may be in any
+  order; NCCL picks its own algorithms and devices (no ring graph files, no `NCCL_ALGO=Ring`, no subnet-aware routing)
+  and carries every exchange: `ROCE_RING`, the ring's relay, is refused there, and this engine has no other RoCE path
+  for four ranks. Everything else (the image, the weights over NFS, the settings, the checks) is the ring's.
+
+Rank 0 is the Spark that runs the script (the API). `./stop-tp4.sh` stops the four ranks of either. `DRY_RUN=1` on
+either prints the links it finds and every rank's command, and changes nothing.
 
 ### Guide: from the pair to four Sparks and back
 
-1. **Cable the ring.** Spark A to B, B to C, C to D, D to A: each Spark's two ConnectX-7 ports go to its two
-   neighbours, and each cable gets its own subnet (a port and its PCIe twin both carry an address on it). No switch.
-   A and C, and B and D, have no cable between them; they reach each other over the LAN.
-2. **Pick rank 0.** It serves the API and holds the weights the others mount. On this kit it is spark1; ranks 1-3 are
-   then spark2 (cabled), spark3 (across) and spark4 (cabled), so `WORKER=spark2`, `WORKER2=spark3`, `WORKER3=spark4`.
+1. **Cable the four Sparks.** On a switch: every Spark's ConnectX-7 ports to the switch, all on one subnet (use
+   `./start-tp4.sh`). Without a switch, a ring: Spark A to B, B to C, C to D, D to A, each Spark's two ports to its two
+   neighbours and each cable its own subnet (a port and its PCIe twin both carry an address on it); A and C, and B and
+   D, have no cable between them and reach each other over the LAN (use `./start-tp4-switchless.sh`).
+2. **Pick rank 0.** It serves the API and holds the weights the others mount. On a ring the workers go in its order:
+   on this kit rank 0 is spark1 and ranks 1-3 are spark2 (cabled), spark3 (across) and spark4 (cabled), so
+   `WORKER=spark2`, `WORKER2=spark3`, `WORKER3=spark4`. On a switch any order works.
    From rank 0, `ssh -o BatchMode=yes <worker> true` must succeed for all three (key-based login; the workers' user
    may differ from rank 0's).
 3. **Stop everything else on the four Sparks.** Each of them serves one rank and needs its GPU and memory free, so
@@ -365,11 +377,11 @@ order** from here (`WORKER` and `WORKER3` cabled to this Spark, `WORKER2` across
    checks every Spark's memory, disk and ports and stops with a reason when one falls short.
 4. **Weights.** Rank 0 needs the checkpoint (and DFlash2) locally, at its pinned revision. The workers either mount
    it over NFS from rank 0 (`WORKER_WEIGHTS=nfs`, the default here: rank 0 must export the folders, read-only, to the
-   cable subnets) or hold their own copy (`WORKER_WEIGHTS=check`). If the export is a different view of the path (a
+   subnets the workers reach it on) or hold their own copy (`WORKER_WEIGHTS=check`). If the export is a different view of the path (a
    container exporting `/huggingface` for `~/.cache/huggingface`), name the exported paths in `NFS_MODEL_PATH` and
    `NFS_DFLASH2_PATH`. `FP8=1` needs about 306 GiB more on rank 0 (see below).
-5. **Write rank 0's `scripts/local.sh`.** The workers in ring order, plus the weights; everything else is the pair's
-   settings. This kit's file:
+5. **Write rank 0's `scripts/local.sh`.** The workers (in ring order on a ring), plus the weights; everything else is
+   the pair's settings. This kit's file (a ring):
    ```sh
    WORKER=zurih@10.0.22.2       # spark2, cabled to this Spark
    WORKER2=zurih@10.0.0.3       # spark3, across the ring
@@ -383,10 +395,11 @@ order** from here (`WORKER` and `WORKER3` cabled to this Spark, `WORKER2` across
    MEMORY_RESERVE_GIB=12        # 9.5 with FP8=1
    ```
    A two-Spark `local.sh` (one `WORKER`, no `WORKER2`/`WORKER3`) starts nothing here: the start stops and names them.
-6. **Check the plan.** `DRY_RUN=1 ./start-tp4.sh` finds the ring, writes nothing and prints every rank's command.
-   It stops with `E_FABRIC` if the cables do not form one ring or the workers are not in its order, and with
-   `E_CONFIG` for a setting this mode does not take.
-7. **Start.** `./start-tp4.sh` (EXL3 4-bit, the default) or `FP8=1 ./start-tp4.sh`. It builds the image on rank 0
+6. **Check the plan.** `DRY_RUN=1 ./start-tp4-switchless.sh` (a ring) or `DRY_RUN=1 ./start-tp4.sh` (a switch) finds
+   the links, writes nothing and prints every rank's command. It stops with `E_FABRIC` when the cabling is the other
+   launcher's (and names it), when the cables do not form one ring or the workers are not in its order, or when a
+   Spark on a switch shares no subnet with the others; and with `E_CONFIG` for a setting this mode does not take.
+7. **Start.** The same command without `DRY_RUN`: EXL3 4-bit by default, or with `FP8=1`. It builds the image on rank 0
    when its patches changed (about 6 minutes) and sends it to the three workers, mounts the weights, starts ranks 3,
    2 and 1, then rank 0, and waits for a greedy smoke reply. A first EXL3 load over NFS takes a few minutes; FP8 about
    4 (245 s measured with the loader's read-ahead at its default; `TF_GLM_LOAD_PREFETCH=0` made it 12 minutes).
@@ -399,7 +412,7 @@ Settings at four Sparks:
 
 | Setting | At TP=4 |
 | --- | --- |
-| `ROCE_RING` | `off`; `on` sends the decode and verify all-gathers as RDMA writes around the ring (patch 0108): +1-2% at one stream and +5-7% at four on FP8, +2-3% on EXL3, greedy replies and NLL unchanged. Opt-in |
+| `ROCE_RING` | Ring only (refused on a switch). `off`; `on` sends the decode and verify all-gathers as RDMA writes around the ring (patch 0108): +1-2% at one stream and +5-7% at four on FP8, +2-3% on EXL3, greedy replies and NLL unchanged. Opt-in |
 | `FP8` | `1` serves Z.AI's block FP8 release (patch 0107); four Sparks only |
 | `LEARN_GIB` | Conversations on disk (patch 0113): rank 0's `CACHE_DIR/learn` holds every rank's part |
 | `CACHE_FIRST`, `PROMPT_CACHE_GIB` | As on the pair (patch 0112) |
@@ -409,17 +422,17 @@ Settings at four Sparks:
 | `EFFORT_LINE`, `CHAT_TEMPLATE` | As on the pair; the written template goes to every worker |
 | `KV_SHARD` | Refused: patch 0114 shards over exactly two ranks |
 | `PROMPT_CACHE_MIN_GIB` | Not checked here (a warning says so); read rank 0's prompt cache line instead |
-| `PREFILL_REDUCE` | `gather`; `ring` does not run on this fabric (see the list below) |
+| `PREFILL_REDUCE` | `gather`; `ring` does not run on the ring fabric (see the list below), and neither is measured on a switch |
 
 Things that break a TP=4 start, and why:
 
 - **`NCCL_SOCKET_IFNAME` exported to every rank.** A follower given one makes this engine unset `NCCL_COMM_ID` before
   NCCL starts, and it panics ("attempt to use null value"). `scripts/tp4.sh` gives it to rank 0 only; do not export
   it yourself. `SOCKET_IFNAME` is the setting for the bootstrap netdev.
-- **`NCCL_RUNTIME_CONNECT=0`.** NCCL's tree for four ranks joins rank 0 to rank 2, which no cable reaches; connecting
+- **`NCCL_RUNTIME_CONNECT=0` on a ring.** NCCL's tree for four ranks joins rank 0 to rank 2, which no cable reaches; connecting
   every channel at init then times out in `ibv_modify_qp`. The launcher sets `NCCL_RUNTIME_CONNECT=1` and
   `NCCL_CUMEM_ENABLE=1` itself.
-- **Workers out of ring order.** `E_FABRIC` names the order it found; swap `WORKER` and `WORKER3`, or fix `WORKER2`.
+- **Workers out of ring order (a ring only).** `E_FABRIC` names the order it found; swap `WORKER` and `WORKER3`, or fix `WORKER2`.
 - **A worker still serving a pair rank.** Its GPU and memory are taken; stop that pair first (`./stop.sh` on its rank 0).
 
 What differs from the pair (`scripts/tp4.sh`):
@@ -469,7 +482,7 @@ until its gates in docs/speed/RESULTS.md are met), `NFS_MODEL_PATH`, `NFS_DFLASH
 
 ### Block FP8 weights (`FP8=1`: Z.AI's own release), four Sparks only
 
-`FP8=1 ./start-tp4.sh` serves `zai-org/GLM-5.3-Flash` @ `46a050be`, the model as Z.AI publishes it: block FP8, e4m3
+`FP8=1` with either four-Spark launcher serves `zai-org/GLM-5.3-Flash` @ `46a050be`, the model as Z.AI publishes it: block FP8, e4m3
 codes with 128 x 128 scales, ~306 GiB (`unsloth/GLM-5.3-Flash-FP8` is a byte-identical mirror; both pins are in
 `scripts/config.sh`). Engine patch `0107` reads it: the routed experts on the engine's block-FP8 expert kernels, the
 dense MLPs, shared experts and the DSA layers' projections on its block-FP8 lane, the rest bf16 as stored; the scale
