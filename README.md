@@ -370,7 +370,8 @@ either prints the links it finds and every rank's command, and changes nothing.
 
 - **EXL3 4-bit** (`Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold`, ~164 GiB): the faster of the two (on the ring, 77.2 tok/s
   at one stream and 172.7 total at eight; [Performance at four Sparks](#performance-at-four-sparks)) and the one to
-  start with. `MEMORY_RESERVE_GIB=12`.
+  start with. Its defaults at four Sparks, `MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1 PROMPT_CACHE_GIB=8`, keep all eight
+  1M-token windows (16,392 pages, 8.4M tokens) and put the room the lower reserve frees into the prompt cache.
 - **Block FP8** (`zai-org/GLM-5.3-Flash`, ~306 GiB, engine patch 0107): the model as Z.AI publishes it, a little
   closer to the original (4-passage NLL 0.7425 against EXL3's 0.7487) and 31-52% slower in decode (52.2 tok/s at
   one stream, 119.0 total at eight), with prefill close to EXL3's (1.8-1.9K tok/s from 16K up). It fits only at four Sparks (~81 GiB of weights a rank); rank 0 downloads it into
@@ -445,7 +446,7 @@ through 256K.
    PORT=8888
    PARALLEL=8
    CONTEXT=auto
-   # MEMORY_RESERVE_GIB: leave it unset. EXL3's default is 12; FP8=1's is 6.5 with CACHE_FIRST=1 PROMPT_CACHE_GIB=4
+   # MEMORY_RESERVE_GIB, CACHE_FIRST, PROMPT_CACHE_GIB: leave them unset (6.5, 1, and 8 for EXL3 or 4 for FP8=1)
    ```
    A two-Spark `local.sh` (one `WORKER`, no `WORKER2`/`WORKER3`) starts nothing here: the start stops and names them.
 6. **Check the plan.** `DRY_RUN=1 ./start-tp4-switchless.sh` (a ring) or `DRY_RUN=1 ./start-tp4.sh` (a switch) finds
@@ -468,7 +469,7 @@ Settings at four Sparks:
 | `ROCE_RING` | Ring only (refused on a switch). `off`; `on` sends the decode and verify all-gathers as RDMA writes around the ring (patch 0108): +1-2% at one stream and +5-7% at four on FP8, +2-3% on EXL3, greedy replies and NLL unchanged. Opt-in |
 | `FP8` | `1` serves Z.AI's block FP8 release (patch 0107); four Sparks only |
 | `LEARN_GIB` | Conversations on disk (patch 0113): rank 0's `CACHE_DIR/learn` holds every rank's part |
-| `MEMORY_RESERVE_GIB`, `CACHE_FIRST`, `PROMPT_CACHE_GIB` | EXL3: `12`, `0`, empty, as on the pair. `FP8=1`: `6.5`, `1`, `4` (2026-11-11): 6,147 pages (3.15M tokens) and a 3.9 GiB prompt cache a rank, with 7.6-10.5 GiB still available on each Spark. At 9.5 the same start had no prompt cache (the pages left 0.08 GiB); at 8, 2.4 GiB. A value set in `local.sh` or the environment wins |
+| `MEMORY_RESERVE_GIB`, `CACHE_FIRST`, `PROMPT_CACHE_GIB` | Four Sparks: `6.5`, `1`, and `4` with `FP8=1` or `8` with EXL3 (the pair keeps `12`, `0`, empty). `FP8=1`, measured 2026-11-11: 6,147 pages (3.15M tokens) and a 3.9 GiB prompt cache a rank, with 7.6-10.5 GiB still available on each Spark; at 9.5 the same start had no prompt cache (the pages left 0.08 GiB), at 8, 2.4 GiB. EXL3 held all eight 1M windows (16,392 pages) and a 3.6 GiB cache at 12; at 6.5 the cache should reach about 8 GiB beside the same pages (not yet measured). A value set in `local.sh` or the environment wins |
 | `L2PF` | `1` prefetches the next weights into L2 during decode (patch 0117); unmeasured at four, opt-in |
 | `EXTRA_EOS` | `<\|assistant\|>` by default (patch 0120), as on the pair |
 | `THINK_OFF_SPLIT` | Opt-in (patch 0121), as on the pair |
