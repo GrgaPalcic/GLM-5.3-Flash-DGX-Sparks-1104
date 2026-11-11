@@ -361,6 +361,24 @@ on the other's, naming the script that fits:
 Rank 0 is the Spark that runs the script (the API). `./stop-tp4.sh` stops the four ranks of either. `DRY_RUN=1` on
 either prints the links it finds and every rank's command, and changes nothing.
 
+**Weights: EXL3 (default) or FP8.** Both launchers serve either checkpoint; `FP8` picks it:
+
+| | On a switch | On a ring (no switch) |
+| --- | --- | --- |
+| EXL3 4-bit (the pair's checkpoint, the default) | `./start-tp4.sh` | `./start-tp4-switchless.sh` |
+| Block FP8 (Z.AI's own release, `FP8=1`) | `FP8=1 ./start-tp4.sh` | `FP8=1 ./start-tp4-switchless.sh` |
+
+- **EXL3 4-bit** (`Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold`, ~164 GiB): the faster of the two (on the ring, 56 /
+  85 tok/s prose / code at one stream, 163-166 total at eight) and the one to start with. `MEMORY_RESERVE_GIB=12`.
+- **Block FP8** (`zai-org/GLM-5.3-Flash`, ~306 GiB, engine patch 0107): the model as Z.AI publishes it, a little
+  closer to the original (4-passage NLL 0.7425 against EXL3's 0.7487) and 20-30% slower (45 / 65 tok/s at one
+  stream, 112-114 at eight). It fits only at four Sparks (~81 GiB of weights a rank); rank 0 downloads it into
+  `DATA_DIR/model-fp8` (or set `MODEL_DIR`, and `NFS_MODEL_PATH` for the workers, to a copy you have), and
+  `MEMORY_RESERVE_GIB=9.5` leaves three 1M-token windows. Details in [Block FP8 weights](#block-fp8-weights-fp81-zais-own-release-four-sparks-only).
+
+Both are measured on the ring only; on a switch neither is run yet. Switching between them is a restart with or
+without `FP8=1` (`./start-tp4.sh restart` or `./start-tp4-switchless.sh restart`); the image is the same.
+
 ### Guide: from the pair to four Sparks and back
 
 1. **Cable the four Sparks.** On a switch: every Spark's ConnectX-7 ports to the switch, all on one subnet (use
