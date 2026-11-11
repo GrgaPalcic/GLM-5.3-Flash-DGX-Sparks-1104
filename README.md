@@ -351,6 +351,77 @@ or the LAN). Rank 0 is this Spark (the API); `WORKER`, `WORKER2` and `WORKER3` a
 order** from here (`WORKER` and `WORKER3` cabled to this Spark, `WORKER2` across). `./stop-tp4.sh` stops the four.
 `DRY_RUN=1 ./start-tp4.sh` prints the ring it finds and every rank's command, and changes nothing.
 
+### Guide: from the pair to four Sparks and back
+
+1. **Cable the ring.** Spark A to B, B to C, C to D, D to A: each Spark's two ConnectX-7 ports go to its two
+   neighbours, and each cable gets its own subnet (a port and its PCIe twin both carry an address on it). No switch.
+   A and C, and B and D, have no cable between them; they reach each other over the LAN.
+2. **Pick rank 0.** It serves the API and holds the weights the others mount. On this kit it is spark1; ranks 1-3 are
+   then spark2 (cabled), spark3 (across) and spark4 (cabled), so `WORKER=spark2`, `WORKER2=spark3`, `WORKER3=spark4`.
+   From rank 0, `ssh -o BatchMode=yes <worker> true` must succeed for all three (key-based login; the workers' user
+   may differ from rank 0's).
+3. **Stop everything else on the four Sparks.** Each of them serves one rank and needs its GPU and memory free, so
+   stop any pair first (`./stop.sh` on each pair's rank 0) and anything else holding GPU memory. Step 1 of the start
+   checks every Spark's memory, disk and ports and stops with a reason when one falls short.
+4. **Weights.** Rank 0 needs the checkpoint (and DFlash2) locally, at its pinned revision. The workers either mount
+   it over NFS from rank 0 (`WORKER_WEIGHTS=nfs`, the default here: rank 0 must export the folders, read-only, to the
+   cable subnets) or hold their own copy (`WORKER_WEIGHTS=check`). If the export is a different view of the path (a
+   container exporting `/huggingface` for `~/.cache/huggingface`), name the exported paths in `NFS_MODEL_PATH` and
+   `NFS_DFLASH2_PATH`. `FP8=1` needs about 306 GiB more on rank 0 (see below).
+5. **Write rank 0's `scripts/local.sh`.** The workers in ring order, plus the weights; everything else is the pair's
+   settings. This kit's file:
+   ```sh
+   WORKER=zurih@10.0.22.2       # spark2, cabled to this Spark
+   WORKER2=zurih@10.0.0.3       # spark3, across the ring
+   WORKER3=zurih@10.0.41.4      # spark4, cabled to this Spark
+   WORKER_WEIGHTS=nfs
+   NFS_MODEL_PATH=/huggingface/glm53-1104/model
+   NFS_DFLASH2_PATH=/huggingface/glm53-1104/dflash2
+   PORT=8888
+   PARALLEL=8
+   CONTEXT=auto
+   MEMORY_RESERVE_GIB=12        # 9.5 with FP8=1
+   ```
+   A two-Spark `local.sh` (one `WORKER`, no `WORKER2`/`WORKER3`) starts nothing here: the start stops and names them.
+6. **Check the plan.** `DRY_RUN=1 ./start-tp4.sh` finds the ring, writes nothing and prints every rank's command.
+   It stops with `E_FABRIC` if the cables do not form one ring or the workers are not in its order, and with
+   `E_CONFIG` for a setting this mode does not take.
+7. **Start.** `./start-tp4.sh` (EXL3 4-bit, the default) or `FP8=1 ./start-tp4.sh`. It builds the image on rank 0
+   when its patches changed (about 6 minutes) and sends it to the three workers, mounts the weights, starts ranks 3,
+   2 and 1, then rank 0, and waits for a greedy smoke reply. A first EXL3 load over NFS takes a few minutes; FP8 about
+   4 (245 s measured with the loader's read-ahead at its default; `TF_GLM_LOAD_PREFETCH=0` made it 12 minutes).
+8. **Check the start.** Rank 0's startup line in `logs/current/rank0.log`: the streams, the KV pages, the prompt
+   cache. The ranks' logs are `logs/current/rank0..3.log`; `curl http://127.0.0.1:8888/health` answers on rank 0.
+9. **Back to the pair.** `./stop-tp4.sh` stops all four ranks (rank 0 first) and archives their logs; then restore
+   the pair's `local.sh` and `./start.sh` on each pair's rank 0.
+
+Settings at four Sparks:
+
+| Setting | At TP=4 |
+| --- | --- |
+| `ROCE_RING` | `off`; `on` sends the decode and verify all-gathers as RDMA writes around the ring (patch 0108): +1-2% at one stream and +5-7% at four on FP8, +2-3% on EXL3, greedy replies and NLL unchanged. Opt-in |
+| `FP8` | `1` serves Z.AI's block FP8 release (patch 0107); four Sparks only |
+| `LEARN_GIB` | Conversations on disk (patch 0113): rank 0's `CACHE_DIR/learn` holds every rank's part |
+| `CACHE_FIRST`, `PROMPT_CACHE_GIB` | As on the pair (patch 0112) |
+| `L2PF` | `1` prefetches the next weights into L2 during decode (patch 0117); unmeasured at four, opt-in |
+| `EXTRA_EOS` | `<\|assistant\|>` by default (patch 0120), as on the pair |
+| `THINK_OFF_SPLIT` | Opt-in (patch 0121), as on the pair |
+| `EFFORT_LINE`, `CHAT_TEMPLATE` | As on the pair; the written template goes to every worker |
+| `KV_SHARD` | Refused: patch 0114 shards over exactly two ranks |
+| `PROMPT_CACHE_MIN_GIB` | Not checked here (a warning says so); read rank 0's prompt cache line instead |
+| `PREFILL_REDUCE` | `gather`; `ring` does not run on this fabric (see the list below) |
+
+Things that break a TP=4 start, and why:
+
+- **`NCCL_SOCKET_IFNAME` exported to every rank.** A follower given one makes this engine unset `NCCL_COMM_ID` before
+  NCCL starts, and it panics ("attempt to use null value"). `scripts/tp4.sh` gives it to rank 0 only; do not export
+  it yourself. `SOCKET_IFNAME` is the setting for the bootstrap netdev.
+- **`NCCL_RUNTIME_CONNECT=0`.** NCCL's tree for four ranks joins rank 0 to rank 2, which no cable reaches; connecting
+  every channel at init then times out in `ibv_modify_qp`. The launcher sets `NCCL_RUNTIME_CONNECT=1` and
+  `NCCL_CUMEM_ENABLE=1` itself.
+- **Workers out of ring order.** `E_FABRIC` names the order it found; swap `WORKER` and `WORKER3`, or fix `WORKER2`.
+- **A worker still serving a pair rank.** Its GPU and memory are taken; stop that pair first (`./stop.sh` on its rank 0).
+
 What differs from the pair (`scripts/tp4.sh`):
 
 - **The ring.** Each Spark's RoCE addresses are read over ssh and paired by subnet; the launcher refuses a switch, a
