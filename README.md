@@ -368,11 +368,12 @@ either prints the links it finds and every rank's command, and changes nothing.
 | EXL3 4-bit (the pair's checkpoint, the default) | `./start-tp4.sh` | `./start-tp4-switchless.sh` |
 | Block FP8 (Z.AI's own release, `FP8=1`) | `FP8=1 ./start-tp4.sh` | `FP8=1 ./start-tp4-switchless.sh` |
 
-- **EXL3 4-bit** (`Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold`, ~164 GiB): the faster of the two (on the ring, 56 /
-  85 tok/s prose / code at one stream, 163-166 total at eight) and the one to start with. `MEMORY_RESERVE_GIB=12`.
+- **EXL3 4-bit** (`Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold`, ~164 GiB): the faster of the two (on the ring, 77.2 tok/s
+  at one stream and 172.7 total at eight; [Performance at four Sparks](#performance-at-four-sparks)) and the one to
+  start with. `MEMORY_RESERVE_GIB=12`.
 - **Block FP8** (`zai-org/GLM-5.3-Flash`, ~306 GiB, engine patch 0107): the model as Z.AI publishes it, a little
-  closer to the original (4-passage NLL 0.7425 against EXL3's 0.7487) and 20-30% slower (45 / 65 tok/s at one
-  stream, 112-114 at eight). It fits only at four Sparks (~81 GiB of weights a rank); rank 0 downloads it into
+  closer to the original (4-passage NLL 0.7425 against EXL3's 0.7487) and 31-52% slower in decode (52.2 tok/s at
+  one stream, 119.0 total at eight), with prefill close to EXL3's (1.8-1.9K tok/s from 16K up). It fits only at four Sparks (~81 GiB of weights a rank); rank 0 downloads it into
   `DATA_DIR/model-fp8` (or set `MODEL_DIR`, and `NFS_MODEL_PATH` for the workers, to a copy you have), and
   `MEMORY_RESERVE_GIB=9.5` leaves three 1M-token windows. Details in [Block FP8 weights](#block-fp8-weights-fp81-zais-own-release-four-sparks-only).
 
@@ -510,7 +511,7 @@ What differs from the pair (`scripts/tp4.sh`):
   planner has far more room: eight 1M-token windows and a prompt cache usually fit at the recipe's default reserve.
   Read rank 0's startup line after every start (the pages, the prompt cache, no "cannot keep one state").
 
-Measured 2026-11-04 on this kit (spark1 rank 0, image `74e19a63a9a5`, 8 streams, 1M window, FP8 KV on pages, q8
+An earlier measurement, greedy with thinking off (the current served-traffic numbers are in [Performance at four Sparks](#performance-at-four-sparks)), 2026-11-04 on this kit (spark1 rank 0, image `74e19a63a9a5`, 8 streams, 1M window, FP8 KV on pages, q8
 dense and head, DFlash2; greedy, the same harness as the pair's numbers under [Performance](#performance)):
 
 | | two Sparks (TP=2) | four Sparks (TP=4, a ring) |
@@ -540,7 +541,7 @@ dense MLPs, shared experts and the DSA layers' projections on its block-FP8 lane
 tensor may be `weight_scale` or `weight_scale_inv`; another block size, a per-tensor FP8 or another code format is
 refused by name. It downloads into `DATA_DIR/model-fp8` when missing (or set `MODEL_DIR` and `NFS_MODEL_PATH` to a copy
 you have); ~81 GiB of weights a rank, so it fits only at TP=4 and leaves three 1M-token windows (3.1M tokens of KV)
-and a ~1 GiB prompt cache at `MEMORY_RESERVE_GIB=9.5`. Measured on this kit (greedy, same harness, image
+and a ~1 GiB prompt cache at `MEMORY_RESERVE_GIB=9.5`. An earlier measurement on this kit (greedy, same harness as the pair's; the current numbers are in [Performance at four Sparks](#performance-at-four-sparks)), image
 `cb33a3d5fc68`):
 
 | | EXL3 4-bit, TP=4 | FP8, TP=4 |
