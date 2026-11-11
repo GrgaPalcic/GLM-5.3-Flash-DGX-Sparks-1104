@@ -1,5 +1,21 @@
 # Changelog
 
+- **2026-11-11** -- contributed script fixes, ported from their PRs (authorship kept):
+  - `PROMPT_CACHE_MIN_GIB`: a `PARALLEL=1` start's "1 stream at once" line is read instead of stopping both ranks
+    (issue #31), and `E_CACHE` names the log archive `stop.sh` wrote rather than the run directory it removed (#25,
+    thanks @laidick; `scripts/tests/cache-min.sh` gains the one-stream case).
+  - `start.sh` after a `CONTEXT=auto` start: KV windows (no pages line) no longer end the start with exit 1 under
+    pipefail, and `W_STREAMS` stays quiet for `PARALLEL=auto` and matches "1 stream at once" (#28, thanks
+    @travellingsoldier85).
+  - `DRY_RUN=1` prints the whole plan with a placeholder for rank 1's `--user` when the worker is out of reach; a real
+    start still stops with `E_WORKER` (#30, thanks @travellingsoldier85).
+  - `VISION=0` with `EFFORT_LINE=thinking` on a checkout that has not downloaded the checkpoint writes the template
+    after step 3's download instead of stopping before step 1 (#27, thanks @travellingsoldier85).
+  - `scripts/graft.py`, a partial Ablit overlay: the layers you name copied byte for byte from the Ablit tree into a
+    hardlinked copy of the published weights, with `scripts/tests/graft.sh` (#26, thanks @mjjjjaazing). On top: an
+    OUT that resolves to PARENT or DONOR through a symlink is refused before anything is unlinked (before, the
+    parent lost its shard), with a test that fails without it.
+
 - **2026-11-11** -- engine patch 0115 (32-row decode windows, from upstream #2257) and the pair's measurements of
   0113-0115. 0115 raises the verify window from 16 to 32 rows, so a context copy verifies up to 31 tokens a round
   (DFlash2 still drafts 7), with the fixes the wider window exposes here: shared-window scratch is said outright (at
