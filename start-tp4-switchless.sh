@@ -373,8 +373,9 @@ show_failure() {
 
 live_message() {
   brand_style
-  printf '%sGLM-5.3-Flash-EXL3 is now LIVE! on port %s (four Sparks, TP=4)%s\n%sEndpoint: %s/v1%s\n' \
-    "$AE_SILVER" "$PORT" "$AE_RESET" "$AE_WHITE" "$URL" "$AE_RESET"
+  local weights=EXL3; [[ "$FP8" != 1 ]] || weights=FP8
+  printf '%sGLM-5.3-Flash-%s is now LIVE! on port %s (four Sparks, TP=4)%s\n%sEndpoint: %s/v1%s\n' \
+    "$AE_SILVER" "$weights" "$PORT" "$AE_RESET" "$AE_WHITE" "$URL" "$AE_RESET"
 }
 
 SMOKE_JSON=$(python3 - "$SERVED_NAME" <<'PY'
