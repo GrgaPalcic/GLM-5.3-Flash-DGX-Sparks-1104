@@ -379,6 +379,39 @@ either prints the links it finds and every rank's command, and changes nothing.
 Both are measured on the ring only; on a switch neither is run yet. Switching between them is a restart with or
 without `FP8=1` (`./start-tp4.sh restart` or `./start-tp4-switchless.sh restart`); the image is the same.
 
+### Performance at four Sparks
+
+Measured 2026-11-11 on the ring (`./start-tp4-switchless.sh`, spark1 as rank 0, image `4835fc852d34`, 121 patches),
+8 streams at a 1,048,576-token window, FP8 KV on pages, q8 dense and head, DFlash2; EXL3 at `MEMORY_RESERVE_GIB=12`,
+FP8 at 9.5. Decode is prose at temperature 0.7 with thinking on and `top_k` 20, so these are served-traffic numbers,
+not the greedy ones above.
+
+Decode (tok/s; time to first token):
+
+| Streams | EXL3 4-bit, total | EXL3 a stream | EXL3 TTFT | Block FP8, total | FP8 a stream | FP8 TTFT |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 77.2 | 77.2 | 128 ms | 52.2 | 52.2 | 204 ms |
+| 2 | 98.0 | 49.6 | 246 ms | 69.5 | 35.7 | 367 ms |
+| 3 | 116.3 | 40.1 | 309 ms | 88.6 | 30.6 | 466 ms |
+| 4 | 134.3 | 35.5 | 382 ms | 88.6 | 23.6 | 563 ms |
+| 8 | 172.7 | 23.0 | 686 ms | 119.0 | 15.8 | 1.08 s |
+
+Prefill (one prompt; tok/s and time to first token):
+
+| Prompt | EXL3 4-bit | EXL3 TTFT | Block FP8 | FP8 TTFT |
+| ---: | ---: | ---: | ---: | ---: |
+| 4K (~4,120 tokens) | 1,582.0 | 2.76 s | 1,534.9 | 2.92 s |
+| 8K (~8,217) | 1,630.0 | 5.20 s | 1,806.6 | 4.78 s |
+| 16K (~16,409) | 1,793.7 | 9.30 s | 1,833.1 | 9.19 s |
+| 32K (~32,791) | 1,879.9 | 17.60 s | 1,843.4 | 18.03 s |
+| 64K (~65,561) | 1,918.7 | 34.33 s | 1,849.3 | 35.69 s |
+| 128K (~131,094) | 1,908.2 | 68.86 s | 1,839.2 | 71.52 s |
+| 256K (~262,173) | 1,902.6 | 137.95 s | 1,802.0 | 145.72 s |
+
+EXL3 decodes 31-52% faster than FP8 at every load (it reads half the expert bytes a round). Prefill is close: FP8 is
+about 10% faster at 8K, and from 16K up the two are within 2-6% (EXL3 ahead from 32K), both holding 1.8-1.9K tok/s
+through 256K.
+
 ### Guide: from the pair to four Sparks and back
 
 1. **Cable the four Sparks.** On a switch: every Spark's ConnectX-7 ports to the switch, all on one subnet (use
