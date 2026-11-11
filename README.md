@@ -1,6 +1,6 @@
 <h1 align="center">GLM-5.3-Flash on DGX Sparks with TensorFold</h1>
 
-<img src=".github/image.png" alt="GLM-5.3-Flash on two DGX Sparks" width="100%">
+<img src=".github/image.jpg" alt="GLM-5.3-Flash on DGX Sparks, now with TP4 support" width="100%">
 
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia's AI Lab</a></sub>
