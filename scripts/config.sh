@@ -205,25 +205,22 @@ HEAD="${HEAD:-bf16}"                             # TF_GLM_HEAD_BITS for the LM h
 # TENSORFOLD_MEMORY_RESERVE_GIB. GB10 is a unified-memory device: the engine budgets from /proc/meminfo's MemAvailable
 # (plus the pages parked on the kernel's per-CPU free lists, which MemAvailable leaves out), not from a card's free
 # memory, and everything the Spark runs besides the rank comes out of the same pool. The engine's own default here is
-# max(4 GiB, MemTotal/10), about 11.9 GiB on a 128 GB Spark; its floor is 2. Raise it when a long session pushes a
-# Spark toward its floor: rank 0 also carries the HTTP server and the vision tower.
-# Four Sparks default to MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1, with PROMPT_CACHE_GIB=4 for FP8=1 and 8 for EXL3.
-# FP8, measured 2026-11-11 on the ring: 6,147 pages (3.15M tokens, three 1M windows) and a 3.9 GiB prompt cache a
-# rank, 7.6-10.5 GiB still available on each Spark; at 9.5 the same start funded no prompt cache (0.08 GiB left after
-# the pages). EXL3 (~46 GiB a rank) already held all eight 1M windows (16,392 pages) and a 3.6 GiB cache at 12; the
-# 5.5 GiB the lower reserve frees goes to the cache (measured: an 8.0 GiB cache beside the same pages).
-if [[ "${GLM_TP4:-0}" == 1 ]]; then
-  MEMORY_RESERVE_GIB="${MEMORY_RESERVE_GIB:-6.5}"
-  if [[ "$FP8" == 1 ]]; then PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-4}"; else PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-8}"; fi
-  CACHE_FIRST="${CACHE_FIRST:-1}"
-fi
-MEMORY_RESERVE_GIB="${MEMORY_RESERVE_GIB:-12}"
-PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-}"         # --prompt-cache-gib of device pages (empty: the engine's default)
+# max(4 GiB, MemTotal/10), about 11.9 GiB on a 128 GB Spark; its floor is 2. 6.5 everywhere since 2026-11-11 (it was 12;
+# the pair ran 9.5). Raise it when a long session pushes a Spark toward its floor: rank 0 also carries the HTTP server
+# and the vision tower.
+MEMORY_RESERVE_GIB="${MEMORY_RESERVE_GIB:-6.5}"
 # CACHE_FIRST=1 (engine patch 0112, TF_PROMPT_CACHE_FIRST): PROMPT_CACHE_GIB is set aside before the room is counted
 # in whole CONTEXT windows, so the PARALLEL streams share the pages left (one window at least) instead of the cache
-# getting what whole windows leave. For long agent sessions: PARALLEL streams and a cache that keeps them. Needs
-# PROMPT_CACHE_GIB. 0 (default): windows first, as before.
-CACHE_FIRST="${CACHE_FIRST:-0}"
+# getting what whole windows leave. 0: windows first. On by default since 2026-11-11: at a 6.5 reserve windows-first
+# would let the pair's page pool take a third 1M window and leave no prompt cache (the cliff RESULTS.md 2026-11-04
+# records at 19.5 GiB of room); FP8 at four Sparks had none at 9.5.
+CACHE_FIRST="${CACHE_FIRST:-1}"
+# PROMPT_CACHE_GIB, device pages for kept prompt states: 5 on the pair (predicted to keep its two 1M windows, 4,096
+# pages, beside it), 8 with EXL3 at four Sparks (measured: all eight windows, 16,392 pages, and an 8.0 GiB cache), 4
+# with FP8=1 (measured: 6,147 pages and a 3.9 GiB cache).
+if [[ "${GLM_TP4:-0}" == 1 && "$FP8" == 1 ]]; then PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-4}"
+elif [[ "${GLM_TP4:-0}" == 1 ]]; then PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-8}"
+else PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-5}"; fi
 # PROMPT_CACHE_MIN_GIB: the smallest prompt cache a start may serve with, in GiB. The engine funds the cache from the
 # room each rank has at that start (it varies by a GiB or more between starts), and PROMPT_CACHE_GIB only caps it, even
 # with CACHE_FIRST=1. With a value here, start.sh reads each rank's startup line and stops both ranks (E_CACHE) before

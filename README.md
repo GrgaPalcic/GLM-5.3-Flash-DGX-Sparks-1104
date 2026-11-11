@@ -139,9 +139,14 @@ prompt's first token comes about 47% later than at `1`. Replies are byte-identic
 
 ## Memory on a 128 GB unified Spark
 
-- VRAM and system RAM are one pool: the budget is `MemAvailable` plus parked pages, minus `MEMORY_RESERVE_GIB` (9.5).
-  Per Spark on the served pair: model 83.3 GiB, KV pool 12.5 GiB (4,098 pages, 2.1M tokens), prompt cache 3.6 GiB.
-- **The page pool takes whole 1M windows first; the prompt cache gets the rest**, so `PROMPT_CACHE_GIB` only caps
+- VRAM and system RAM are one pool: the budget is `MemAvailable` plus parked pages, minus `MEMORY_RESERVE_GIB`.
+- **Defaults since 2026-11-11, two and four Sparks alike: `MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1`**, with
+  `PROMPT_CACHE_GIB` 5 on the pair, 8 with EXL3 at four Sparks and 4 with FP8. The lower reserve funds the prompt
+  cache; cache-first keeps it from being lost to a third window (below). At four Sparks measured: see the
+  [memory table](#4-sparks-tp4-experimental). On the pair the 5 GiB is predicted to sit beside the same two 1M
+  windows (4,096 pages) and is not measured yet; check rank 0's startup line. Before, at 9.5 and windows first, per
+  Spark on the served pair: model 83.3 GiB, KV pool 12.5 GiB (4,098 pages, 2.1M tokens), prompt cache 3.6 GiB.
+- **With `CACHE_FIRST=0`, the page pool takes whole 1M windows first; the prompt cache gets the rest**, so `PROMPT_CACHE_GIB` only caps
   it, and each stream past the first costs about 0.42 GiB. Room differs by a few GiB between Sparks. After every
   start or change, check rank 0's startup line: `4098 pages`, `prompt cache: N GiB`, no `cannot keep one state`.
 - **Cache hits land on a 4,096-token grid** (up to 4,095 trailing tokens re-prefilled, about 2.5 s), and the cache
@@ -171,7 +176,8 @@ The engine refuses a window that does not fit after loading, naming bytes. `CONT
 
 Layered: `scripts/config.sh` defaults, then `.env`, then `scripts/local.sh` (trusted Bash, gitignored), then exported
 variables. **The served pair's `local.sh`** sets `PORT=8888`, `PARALLEL=8`, `CONTEXT=auto`, `KV=fp8`, `DENSE=q8`,
-`HEAD=q8`, `ABSORB_MMA=1`, `HOST_CACHE_GIB=0`, `MEMORY_RESERVE_GIB=9.5`, `MODEL_SOURCE=local`, `WORKER_WEIGHTS=check`.
+`HEAD=q8`, `ABSORB_MMA=1`, `HOST_CACHE_GIB=0`, `MODEL_SOURCE=local`, `WORKER_WEIGHTS=check`, and the reserve at the
+default 6.5.
 
 ### The pair
 
@@ -199,11 +205,11 @@ variables. **The served pair's `local.sh`** sets `PORT=8888`, `PARALLEL=8`, `CON
 | `CONTEXT`, `CONTEXT_MAX` | `auto`, `1048576` | See [CONTEXT=auto](#contextauto) |
 | `KV`, `KV_PAGES` | `fp8`, `on` | `--kv-cache`, one shared pool of 512-row pages with `CONTEXT` as one request's cap |
 | `DENSE`, `HEAD` | `q8`, `bf16` | `bf16`, `q8`, `q6` or `q4` for the dense linears and the LM head; the pair's `local.sh` sets `HEAD=q8` |
-| `MEMORY_RESERVE_GIB`, `HOST_CACHE_GIB`, `PROMPT_CACHE_GIB` | `12`, `0`, empty | See [Memory](#memory-on-a-128-gb-unified-spark); the pair runs the reserve at 9.5 |
+| `MEMORY_RESERVE_GIB`, `HOST_CACHE_GIB`, `PROMPT_CACHE_GIB` | `6.5`, `0`, `5` | `PROMPT_CACHE_GIB` is `8` with EXL3 and `4` with `FP8=1` at four Sparks. See [Memory](#memory-on-a-128-gb-unified-spark); the reserve was 12 (the pair ran 9.5) before 2026-11-11 |
 | `LEARN_GIB`, `LEARN_MIN_FREE_GIB` | `0`, `15` | `LEARN_GIB` > 0 keeps the prompt states on disk too, up to that many GiB (`--learn-conversations`, patch 0113); see [Memory](#memory-on-a-128-gb-unified-spark) |
 | `KV_SHARD` | `0` | `1` keeps each stream's latent rows on one Spark (`TF_GLM_KV_SHARD`, patch 0114): about twice the tokens, 1-4% decode; use with `CACHE_FIRST=1 PROMPT_CACHE_GIB=6`, see [Memory](#memory-on-a-128-gb-unified-spark). Needs `KV=fp8`, `KV_PAGES=on`, DFlash2 or no drafter, `PARALLEL` auto or above 1. TP=2 only: `./start-tp4.sh` refuses it |
 | `L2PF` | `0` | `1` prefetches each decode window's next weights into L2 on a side stream (`TF_GLM_L2PF`, patch 0117, from upstream): the next layer's mixer input, this layer's router and KDA's `o_proj`, not the EXL3 routed experts. Upstream turns it on at TP>=2 on GB10; here it measured +2% at one stream and flat at four and eight (exact), so it stays opt-in. `TF_GLM_L2PF_MB`, `_CTAS`, `_PACE_GBPS` (12, 2, 150) pass through as exported `TF_*` variables |
-| `CACHE_FIRST` | `0` | `1` sets `PROMPT_CACHE_GIB` (required) aside before the streams' windows (`TF_PROMPT_CACHE_FIRST`, patch 0112), so the cap becomes the cache; see [Memory](#memory-on-a-128-gb-unified-spark) |
+| `CACHE_FIRST` | `1` | `1` sets `PROMPT_CACHE_GIB` (required) aside before the streams' windows (`TF_PROMPT_CACHE_FIRST`, patch 0112), so the cap becomes the cache; `0` counts whole windows first and gives the cache what they leave. See [Memory](#memory-on-a-128-gb-unified-spark) |
 | `PROMPT_CACHE_MIN_GIB` | empty | The smallest prompt cache a start may serve with. `start.sh` reads each rank's startup line and stops both ranks before LIVE (`E_CACHE`) when one funds less; the cache is what that start's room leaves, so `PROMPT_CACHE_GIB` caps it but does not guarantee it, even with `CACHE_FIRST=1` (issue 16). Empty: no check. `./start-tp4.sh` does not check it |
 | `WITH_VIDEO` | `0` | `1` builds `libtfvideo.so` (FFmpeg 9.0.2, static, LGPL; h264/hevc/vp8/vp9/mpeg4 in mp4/mkv) into its own image tag, so `VISION=1` serves `video_url` parts; a few minutes more at build |
 | `VISION`, `VISION_MAX_IMAGES`, `CHAT_TEMPLATE` | `1`, `50`, `auto` | Image input (`image_url` parts) on rank 0's tower, with `templates/glm-5.3-flash-vision.jinja`. `video_url` parts too with `WITH_VIDEO=1` (otherwise HTTP 500, issue 8); audio parts are unsupported and an mp4's audio track is ignored |
@@ -483,7 +489,7 @@ Settings at four Sparks:
 | `ROCE_RING` | Ring only (refused on a switch). `off`; `on` sends the decode and verify all-gathers as RDMA writes around the ring (patch 0108): +1-2% at one stream and +5-7% at four on FP8, +2-3% on EXL3, greedy replies and NLL unchanged. Opt-in |
 | `FP8` | `1` serves Z.AI's block FP8 release (patch 0107); four Sparks only |
 | `LEARN_GIB` | Conversations on disk (patch 0113): rank 0's `CACHE_DIR/learn` holds every rank's part |
-| `MEMORY_RESERVE_GIB`, `CACHE_FIRST`, `PROMPT_CACHE_GIB` | Four Sparks: `6.5`, `1`, and `4` with `FP8=1` or `8` with EXL3 (the pair keeps `12`, `0`, empty). `FP8=1`, measured 2026-11-11: 6,147 pages (3.15M tokens) and a 3.9 GiB prompt cache a rank, with 7.6-10.5 GiB still available on each Spark; at 9.5 the same start had no prompt cache (the pages left 0.08 GiB), at 8, 2.4 GiB. EXL3 at 6.5: the same 16,392 pages it held at 12 (all eight 1M windows) and an 8.0 GiB prompt cache instead of 3.6. See the memory table under [Weights](#4-sparks-tp4-experimental). A value set in `local.sh` or the environment wins |
+| `MEMORY_RESERVE_GIB`, `CACHE_FIRST`, `PROMPT_CACHE_GIB` | Four Sparks: `6.5`, `1`, and `4` with `FP8=1` or `8` with EXL3 (the pair: `6.5`, `1`, `5`). `FP8=1`, measured 2026-11-11: 6,147 pages (3.15M tokens) and a 3.9 GiB prompt cache a rank, with 7.6-10.5 GiB still available on each Spark; at 9.5 the same start had no prompt cache (the pages left 0.08 GiB), at 8, 2.4 GiB. EXL3 at 6.5: the same 16,392 pages it held at 12 (all eight 1M windows) and an 8.0 GiB prompt cache instead of 3.6. See the memory table under [Weights](#4-sparks-tp4-experimental). A value set in `local.sh` or the environment wins |
 | `L2PF` | `1` prefetches the next weights into L2 during decode (patch 0117); unmeasured at four, opt-in |
 | `EXTRA_EOS` | `<\|assistant\|>` by default (patch 0120), as on the pair |
 | `THINK_OFF_SPLIT` | Opt-in (patch 0121), as on the pair |

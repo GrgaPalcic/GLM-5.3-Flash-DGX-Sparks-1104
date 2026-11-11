@@ -1,5 +1,11 @@
 # Changelog
 
+- **2026-11-11** -- `MEMORY_RESERVE_GIB=6.5` and `CACHE_FIRST=1` are the defaults everywhere, the pair included (the
+  reserve was 12, and the pair ran 9.5 in its `local.sh`; cache-first was off), with `PROMPT_CACHE_GIB` 5 on the pair
+  (8 and 4 at four Sparks, as below). Cache-first is part of it: at 6.5 and windows first the pair's page pool would
+  cross the 19.5 GiB threshold for a third 1M window and leave no prompt cache (RESULTS.md 2026-11-04). The pair's
+  5 GiB beside its two windows is predicted, not yet measured. `scripts/local.sh.example` and the README follow.
+
 - **2026-11-11** -- Four Sparks with EXL3 take the same defaults, `MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1`, with
   `PROMPT_CACHE_GIB=8`: at 12 they already held all eight 1M windows (16,392 pages) and a 3.6 GiB prompt cache, and the
   5.5 GiB the lower reserve frees goes to the cache: measured on the ring, the same 16,392 pages (8.39M tokens) and an
