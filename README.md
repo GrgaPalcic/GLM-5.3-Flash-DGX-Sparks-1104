@@ -19,7 +19,7 @@
 
 **Engine: TensorFold 1.1.9** (`tensorfold-native --version`), upstream commit
 [`f350cd3e`](https://github.com/ashhart/TensorFold/commit/f350cd3ea253a042e205746928271f9d8f71a82d) plus this recipe's
-127 engine patches (`patches/engine/`).
+128 engine patches (`patches/engine/`).
 
 This recipe serves GLM-5.3-Flash from an EXL3 checkpoint on **two NVIDIA DGX Sparks** (GB10, 128 GB unified memory
 each) at tensor parallel 2, one rank on each Spark, over their ConnectX-7 link. It uses TensorFold's native Zig/CUDA
@@ -49,7 +49,7 @@ The engine is TensorFold 1.1.9 at commit `f350cd3e` ([ashhart/TensorFold](https:
 
 ## What is checked
 
-127 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
+128 patches apply to `f350cd3e` with no rejects; the image builds on aarch64 for `sm_121` (about 6 minutes) and
 reaches the worker by content; link discovery finds both PCIe twins of the cabled port and the RoCE v2 GID that
 holds each port's own IPv4; NCCL and the engine's RDMA all-gather run over the cable; the full 1,048,576-token window
 serves 8 streams beside a 3.6 GiB prompt cache; greedy replies are byte-stable across every change
@@ -175,7 +175,7 @@ variables. **The served pair's `local.sh`** sets `PORT=8888`, `PARALLEL=8`, `CON
 
 ### Recommended settings on this branch (shared KV pages and the SSD tier, two Sparks)
 
-This branch (`kv-share-ssd`) carries engine patches 0113-0127 on top of the recipe. They are all off by default; the
+This branch (`kv-share-ssd`) carries engine patches 0113-0128 on top of the recipe. They are all off by default; the
 settings that turn them on, as served on a pair of DGX Sparks since 2026-11-10, are in
 [`scripts/local.sh.kv-share.example`](scripts/local.sh.kv-share.example):
 
@@ -341,9 +341,9 @@ and MMLU 88.4%, thinking-on categories unchanged.
 
 ## Engine patches
 
-`patches/engine/` holds 127 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
+`patches/engine/` holds 128 patches on TensorFold `f350cd3e`, applied in filename order at image build: 0001-0093 are
 the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-6000-TensorFold)'s, unchanged;
-0094-0127 are this pair's own or ported from that recipe or from upstream. None is GB10-specific: the arch-gated kernels test
+0094-0128 are this pair's own or ported from that recipe or from upstream. None is GB10-specific: the arch-gated kernels test
 `__CUDA_ARCH__ >= 1200`, which `sm_121` satisfies.
 
 | Patches | What they do |
@@ -381,6 +381,7 @@ the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-2x-RTX-PRO-
 | 0125 | A failed disk recall under `TF_KV_SHARE` costs a cold prefill, not the lane: rank 0 gives the pages back and marks the state unreadable (`disk_recalls_failed`); a rank other than 0 poisons the state and answers with a status word instead of leaving its step loop. |
 | 0126 | `TF_GLM_DISK_FAULT=n` (off by default): a fault drill, the nth disk write a rank other than 0 takes fails once. |
 | 0127 | `tools/share_gate.py`: the served exactness gate used for 0113-0126 (resumed = fresh, concurrent = alone, drafted = plain). |
+| 0128 | Under `KV_SHARD=1` with `TF_KV_SHARE`: a cold pass with nothing to resume seats in the part of the prefix the store holds, and a keep whose pages would span the parts evicts that part's idle branches and replaces the chain instead of refusing. Without it, a long conversation seated away from its prefix was refused on every turn and ran cold each time (335K tokens, ~207 s to first token). CPU host tests only; not yet gated with `share_gate.py` on a served lane. |
 
 Every default-on patch was A/B tested against the image before it: greedy replies identical plus a measured gain.
 

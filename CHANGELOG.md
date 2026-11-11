@@ -1,5 +1,10 @@
 # Changelog
 
+- **2026-11-11** -- engine patch 0128: a cold pass seats in its held prefix's part; a cross-part keep evicts idle
+  branches instead of refusing. Under KV_SHARD=1 with TF_KV_SHARE, a pass with nothing to resume took the part with
+  fewer live streams; when the store held its prefix in the other part with other branches below, every keep was
+  refused (kv_shard_keeps_refused_total) and every later turn ran cold. Host tests: the kv shard and share suite
+  31/31 (three new), prompt radix 31/31, GLM pages, admission and scheduling. Not yet gated with share_gate.py.
 - **2026-11-10** -- engine patch 0127: tools/share_gate.py, the served exactness gate for kept-state changes.
   The tool the 0113-0126 measurements were taken with: against a serving lane it checks resumed = fresh at calibrated
   prompt sizes, concurrent = alone at each level, drafted = plain, with a per-run nonce so a cold run is cold.
