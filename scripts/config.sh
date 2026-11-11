@@ -207,6 +207,14 @@ HEAD="${HEAD:-bf16}"                             # TF_GLM_HEAD_BITS for the LM h
 # memory, and everything the Spark runs besides the rank comes out of the same pool. The engine's own default here is
 # max(4 GiB, MemTotal/10), about 11.9 GiB on a 128 GB Spark; its floor is 2. Raise it when a long session pushes a
 # Spark toward its floor: rank 0 also carries the HTTP server and the vision tower.
+# Four Sparks with FP8=1 default to MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1 PROMPT_CACHE_GIB=4: measured 2026-11-11 on
+# the ring, 6,147 pages (3.15M tokens, three 1M windows) and a 3.9 GiB prompt cache a rank, 7.6-10.5 GiB still
+# available on each Spark. At 9.5 the same start funded no prompt cache at all (0.08 GiB left after the pages).
+if [[ "${GLM_TP4:-0}" == 1 && "$FP8" == 1 ]]; then
+  MEMORY_RESERVE_GIB="${MEMORY_RESERVE_GIB:-6.5}"
+  PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-4}"
+  CACHE_FIRST="${CACHE_FIRST:-1}"
+fi
 MEMORY_RESERVE_GIB="${MEMORY_RESERVE_GIB:-12}"
 PROMPT_CACHE_GIB="${PROMPT_CACHE_GIB:-}"         # --prompt-cache-gib of device pages (empty: the engine's default)
 # CACHE_FIRST=1 (engine patch 0112, TF_PROMPT_CACHE_FIRST): PROMPT_CACHE_GIB is set aside before the room is counted

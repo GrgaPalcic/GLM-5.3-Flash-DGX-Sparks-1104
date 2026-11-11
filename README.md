@@ -375,7 +375,8 @@ either prints the links it finds and every rank's command, and changes nothing.
   closer to the original (4-passage NLL 0.7425 against EXL3's 0.7487) and 31-52% slower in decode (52.2 tok/s at
   one stream, 119.0 total at eight), with prefill close to EXL3's (1.8-1.9K tok/s from 16K up). It fits only at four Sparks (~81 GiB of weights a rank); rank 0 downloads it into
   `DATA_DIR/model-fp8` (or set `MODEL_DIR`, and `NFS_MODEL_PATH` for the workers, to a copy you have), and
-  `MEMORY_RESERVE_GIB=9.5` leaves three 1M-token windows. Details in [Block FP8 weights](#block-fp8-weights-fp81-zais-own-release-four-sparks-only).
+  its defaults at four Sparks, `MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1 PROMPT_CACHE_GIB=4`, leave three 1M-token windows
+  (6,147 pages, 3.15M tokens) and a 3.9 GiB prompt cache a rank. Details in [Block FP8 weights](#block-fp8-weights-fp81-zais-own-release-four-sparks-only).
 
 Both are measured on the ring only; on a switch neither is run yet. Switching between them is a restart with or
 without `FP8=1` (`./start-tp4.sh restart` or `./start-tp4-switchless.sh restart`); the image is the same.
@@ -444,7 +445,7 @@ through 256K.
    PORT=8888
    PARALLEL=8
    CONTEXT=auto
-   MEMORY_RESERVE_GIB=12        # 9.5 with FP8=1
+   # MEMORY_RESERVE_GIB: leave it unset. EXL3's default is 12; FP8=1's is 6.5 with CACHE_FIRST=1 PROMPT_CACHE_GIB=4
    ```
    A two-Spark `local.sh` (one `WORKER`, no `WORKER2`/`WORKER3`) starts nothing here: the start stops and names them.
 6. **Check the plan.** `DRY_RUN=1 ./start-tp4-switchless.sh` (a ring) or `DRY_RUN=1 ./start-tp4.sh` (a switch) finds
@@ -467,7 +468,7 @@ Settings at four Sparks:
 | `ROCE_RING` | Ring only (refused on a switch). `off`; `on` sends the decode and verify all-gathers as RDMA writes around the ring (patch 0108): +1-2% at one stream and +5-7% at four on FP8, +2-3% on EXL3, greedy replies and NLL unchanged. Opt-in |
 | `FP8` | `1` serves Z.AI's block FP8 release (patch 0107); four Sparks only |
 | `LEARN_GIB` | Conversations on disk (patch 0113): rank 0's `CACHE_DIR/learn` holds every rank's part |
-| `CACHE_FIRST`, `PROMPT_CACHE_GIB` | As on the pair (patch 0112) |
+| `MEMORY_RESERVE_GIB`, `CACHE_FIRST`, `PROMPT_CACHE_GIB` | EXL3: `12`, `0`, empty, as on the pair. `FP8=1`: `6.5`, `1`, `4` (2026-11-11): 6,147 pages (3.15M tokens) and a 3.9 GiB prompt cache a rank, with 7.6-10.5 GiB still available on each Spark. At 9.5 the same start had no prompt cache (the pages left 0.08 GiB); at 8, 2.4 GiB. A value set in `local.sh` or the environment wins |
 | `L2PF` | `1` prefetches the next weights into L2 during decode (patch 0117); unmeasured at four, opt-in |
 | `EXTRA_EOS` | `<\|assistant\|>` by default (patch 0120), as on the pair |
 | `THINK_OFF_SPLIT` | Opt-in (patch 0121), as on the pair |
@@ -541,7 +542,8 @@ dense MLPs, shared experts and the DSA layers' projections on its block-FP8 lane
 tensor may be `weight_scale` or `weight_scale_inv`; another block size, a per-tensor FP8 or another code format is
 refused by name. It downloads into `DATA_DIR/model-fp8` when missing (or set `MODEL_DIR` and `NFS_MODEL_PATH` to a copy
 you have); ~81 GiB of weights a rank, so it fits only at TP=4 and leaves three 1M-token windows (3.1M tokens of KV)
-and a ~1 GiB prompt cache at `MEMORY_RESERVE_GIB=9.5`. An earlier measurement on this kit (greedy, same harness as the pair's; the current numbers are in [Performance at four Sparks](#performance-at-four-sparks)), image
+and, at its defaults (`MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1 PROMPT_CACHE_GIB=4`), a 3.9 GiB prompt cache a rank (none at
+the earlier 9.5). An earlier measurement on this kit (greedy, same harness as the pair's; the current numbers are in [Performance at four Sparks](#performance-at-four-sparks)), image
 `cb33a3d5fc68`):
 
 | | EXL3 4-bit, TP=4 | FP8, TP=4 |

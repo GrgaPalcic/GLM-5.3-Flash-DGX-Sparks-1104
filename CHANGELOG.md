@@ -1,5 +1,11 @@
 # Changelog
 
+- **2026-11-11** -- Four Sparks with `FP8=1` default to `MEMORY_RESERVE_GIB=6.5 CACHE_FIRST=1 PROMPT_CACHE_GIB=4`
+  (`scripts/config.sh`; EXL3 and the pair keep 12 and no cache-first). At the earlier 9.5 the FP8 start's KV pages left
+  0.08 GiB, so it served with no prompt cache; at 6.5 the ring measured the same 6,147 pages (3.15M tokens) and a
+  3.9 GiB prompt cache a rank, with 7.6-10.5 GiB still available on each Spark. A value in `local.sh` or the
+  environment still wins.
+
 - **2026-11-11** -- Four Sparks (TP=4) join main, with `./start-tp4.sh` (a switch) and `./start-tp4-switchless.sh` (a
   ring of direct cables), `./stop-tp4.sh`, `scripts/tp4.sh`, the README's "4 Sparks" section with a step-by-step guide,
   and their measurements under `docs/speed/tp4`. **The engine patches are renumbered for everyone, the pair too:** the
