@@ -1,5 +1,21 @@
 # Changelog
 
+- **2026-11-11** -- three contributed changes, ported from their PRs (authorship kept):
+  - Engine patch 0116, `EXTRA_EOS` (default `<|assistant|>`, `TF_EXTRA_EOS`): tokens that end a reply besides the
+    checkpoint's EOS ids. GLM-5.3's `generation_config.json` leaves out `<|assistant|>`, which the model can write to
+    close a reply; it then reached the reply as text and the model wrote its whole reply again until the length cap
+    (#36, thanks @wagzee; submitted as 0112, renumbered after main's 0112-0115). `EXTRA_EOS=none` keeps the
+    checkpoint's list.
+  - Engine patch 0117, `THINK_OFF_SPLIT` (`TF_THINK_OFF_SPLIT`), **opt-in**: a thinking-off chat reply that writes
+    `</think>` within the hold has its draft as `reasoning_content` and its answer as `content`. It ships off
+    (`THINK_OFF_SPLIT=0`, the engine's own default when unset) because a hold delays every streamed thinking-off
+    reply's first content by up to that many tokens; 1024 is the hold its author measured (#37, thanks @wagzee;
+    submitted on by default as 0113).
+  - `validate_config`: `KV_SHARD=1` also needs `KV_PAGES=on` and `PARALLEL` other than 1, which patch 0110 refuses
+    after `./start.sh restart` has stopped the serving pair; they now stop before anything runs, with
+    `scripts/tests/kv-shard-config.sh` (#29, thanks @travellingsoldier85).
+  The 117 patches apply to `f350cd3e`; the image builds with 0116 and 0117. Not measured on the pair.
+
 - **2026-11-11** -- contributed script fixes, ported from their PRs (authorship kept):
   - `PROMPT_CACHE_MIN_GIB`: a `PARALLEL=1` start's "1 stream at once" line is read instead of stopping both ranks
     (issue #31), and `E_CACHE` names the log archive `stop.sh` wrote rather than the run directory it removed (#25,
